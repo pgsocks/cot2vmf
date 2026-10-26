@@ -1,0 +1,31 @@
+services:
+  translator:
+    image: cot-to-vmf:local
+    build:
+      context: ..
+      target: production
+    command:
+      - run
+      - --workspace
+      - /var/lib/cot-to-vmf
+      - --cot-listen
+      - 0.0.0.0:9001
+      - --vmf-target
+      - ${VMF_TARGET:-127.0.0.1:9002}
+      - --web
+      - 0.0.0.0:8080
+      - --log-format
+      - json
+    ports:
+      - "${COT_BIND:-127.0.0.1}:9001:9001/udp"
+      - "${WEB_BIND:-127.0.0.1}:8080:8080"
+    volumes:
+      - workspace:/var/lib/cot-to-vmf
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+    stop_grace_period: 5s
+volumes:
+  workspace:

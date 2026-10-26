@@ -1,0 +1,8 @@
+/build/
+/CMakeUserPresets.json
+/.bundle/
+/vendor/bundle/
+/workspace/
+/state/
+__pycache__/
+*.pyc

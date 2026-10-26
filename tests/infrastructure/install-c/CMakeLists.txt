@@ -1,0 +1,8 @@
+cmake_minimum_required(VERSION 3.24)
+project(install_consumer LANGUAGES C CXX)
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_C_EXTENSIONS OFF)
+find_package(cot2vmf CONFIG REQUIRED)
+add_executable(consumer main.c)
+target_link_libraries(consumer PRIVATE cot2vmf::cot2vmf)

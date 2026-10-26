@@ -1,0 +1,8 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+find_dependency(cot CONFIG)
+find_dependency(vmf CONFIG COMPONENTS schema_json header_json)
+find_dependency(yyjson CONFIG)
+include("${CMAKE_CURRENT_LIST_DIR}/cot2vmf-targets.cmake")
+check_required_components(cot2vmf)

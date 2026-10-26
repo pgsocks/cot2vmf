@@ -1,0 +1,195 @@
+{
+  "format": "cot-vmf-workspace/1",
+  "schemas": [
+    {
+      "id": "synthetic",
+      "document": {
+        "format": "vmf-schema/1",
+        "envelope": "C",
+        "standard_version": 0,
+        "messages": [
+          {
+            "message_number": "K01.1",
+            "indexes": [
+              {
+                "index_number": "1.",
+                "key": "latitude",
+                "number_of_bits": 32,
+                "encode_type": "scaled",
+                "representation": "twos_complement",
+                "scale": {
+                  "factor": {
+                    "numerator": 1,
+                    "denominator": 100000
+                  },
+                  "bias": {
+                    "numerator": 0,
+                    "denominator": 1
+                  }
+                }
+              },
+              {
+                "index_number": "2.",
+                "key": "longitude",
+                "number_of_bits": 32,
+                "encode_type": "scaled",
+                "representation": "twos_complement",
+                "scale": {
+                  "factor": {
+                    "numerator": 1,
+                    "denominator": 100000
+                  },
+                  "bias": {
+                    "numerator": 0,
+                    "denominator": 1
+                  }
+                }
+              },
+              {
+                "index_number": "3.",
+                "key": "identifier",
+                "number_of_bits": 224,
+                "encode_type": "literal"
+              }
+            ]
+          },
+          {
+            "message_number": "K01.2",
+            "indexes": [
+              {
+                "index_number": "1.",
+                "key": "latitude",
+                "number_of_bits": 32,
+                "encode_type": "scaled",
+                "representation": "twos_complement",
+                "scale": {
+                  "factor": {
+                    "numerator": 1,
+                    "denominator": 100000
+                  },
+                  "bias": {
+                    "numerator": 0,
+                    "denominator": 1
+                  }
+                }
+              },
+              {
+                "index_number": "2.",
+                "key": "longitude",
+                "number_of_bits": 32,
+                "encode_type": "scaled",
+                "representation": "twos_complement",
+                "scale": {
+                  "factor": {
+                    "numerator": 1,
+                    "denominator": 100000
+                  },
+                  "bias": {
+                    "numerator": 0,
+                    "denominator": 1
+                  }
+                }
+              },
+              {
+                "index_number": "3.",
+                "key": "identifier",
+                "number_of_bits": 224,
+                "encode_type": "literal"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "outputs": [
+    {
+      "id": "position-1",
+      "enabled": true,
+      "mapping": {
+        "format": "cot-vmf-mapping-config/1",
+        "schema": "synthetic",
+        "vmf_header": {
+          "fields": {
+            "messages": [
+              {
+                "id": {
+                  "user_message_format": 2,
+                  "standard_version": 0,
+                  "identification": {
+                    "functional_area": 1,
+                    "message_number": 1
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "fields": [
+          {
+            "cot": "point.latitude",
+            "vmf": {
+              "key": "latitude"
+            }
+          },
+          {
+            "cot": "point.longitude",
+            "vmf": {
+              "key": "longitude"
+            }
+          },
+          {
+            "cot": "uid",
+            "vmf": {
+              "key": "identifier"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "position-2",
+      "enabled": true,
+      "mapping": {
+        "format": "cot-vmf-mapping-config/1",
+        "schema": "synthetic",
+        "vmf_header": {
+          "fields": {
+            "messages": [
+              {
+                "id": {
+                  "user_message_format": 2,
+                  "standard_version": 0,
+                  "identification": {
+                    "functional_area": 1,
+                    "message_number": 2
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "fields": [
+          {
+            "cot": "point.latitude",
+            "vmf": {
+              "key": "latitude"
+            }
+          },
+          {
+            "cot": "point.longitude",
+            "vmf": {
+              "key": "longitude"
+            }
+          },
+          {
+            "cot": "uid",
+            "vmf": {
+              "key": "identifier"
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

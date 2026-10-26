@@ -1,0 +1,8 @@
+#ifndef COT_VMF_WEB_ASSETS_H
+#define COT_VMF_WEB_ASSETS_H
+
+static const char web_html[] = R"CV_HTML(@WEB_HTML@)CV_HTML";
+static const char web_css[] = R"CV_CSS(@WEB_CSS@)CV_CSS";
+static const char web_js[] = R"CV_JS(@WEB_JS@)CV_JS";
+
+#endif
