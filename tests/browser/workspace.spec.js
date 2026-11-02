@@ -311,8 +311,8 @@ test('autosave preserves pending input and its editor bindings',
       await heldSave;
       await route.fulfill({ response });
     });
-    const width = page.locator('#schema-editor [data-property="number_of_bits"]');
-    await width.fill('16');
+    const width = page.locator('#schema-editor [data-property="index_number"]');
+    await width.fill('3.');
     await width.press('Tab');
     await saveStarted;
     const key = page.locator('#schema-editor [data-property="key"]');
@@ -377,6 +377,8 @@ test('author a native schema visually and retain it across reload',
     const message = page.locator('#schema-editor [data-property="message_number"]');
     await message.fill('K01.1'); await message.press('Tab');
     await page.locator('#add-index').click();
+    await payloadStep(page, '2. Encoding');
+    await payloadStep(page, '3. Size & length');
     const width = page.locator('#schema-editor [data-property="number_of_bits"]');
     await width.fill('16'); await width.press('Tab');
     await saved(page);
@@ -490,14 +492,14 @@ test('invalid visual draft remains editable while active revision survives',
     await page.locator('[data-tab="schemas"]').click();
     await page.locator('#schema-list [data-schema-id="synthetic"]').click();
     await page.locator('.tree-select.field').first().click();
-    const width = page.locator('#schema-editor [data-property="number_of_bits"]');
-    await width.fill('0'); await width.press('Tab');
+    const width = page.locator('#schema-editor [data-property="index_number"]');
+    await width.fill('2.'); await width.press('Tab');
     await expect.poll(async () => (await state(request)).valid).toBe(false);
     expect((await state(request)).active_revision).toBe(active);
     await expect(page.locator('#draft-error')).toBeVisible();
     await page.reload();
     expect((await state(request)).draft.schemas[0].document.messages[0]
-      .indexes[0].number_of_bits).toBe(0);
+      .indexes[0].index_number).toBe('2.');
   });
 
 test('native schema import and export preserve exact integers and metadata',
@@ -523,6 +525,9 @@ test('native schema import and export preserve exact integers and metadata',
     await saved(page);
     await expect.poll(async () => (await state(request)).valid).toBe(true);
     await page.locator('.tree-select.field').first().click();
+    await payloadStep(page, '2. Encoding');
+    await payloadStep(page, '3. Size & length');
+    await payloadStep(page, '4. Constraints');
     await expect(page.locator('[data-property="constant"]'))
       .toHaveValue('18446744073709551615');
     const event = page.waitForEvent('download');
@@ -877,8 +882,8 @@ test('an activation failure retains the new draft revision and pending input',
           error: 'Cannot persist active configuration' }),
       });
     });
-    const width = page.locator('#schema-editor [data-property="number_of_bits"]');
-    await width.fill('16'); await width.press('Tab');
+    const width = page.locator('#schema-editor [data-property="index_number"]');
+    await width.fill('3.'); await width.press('Tab');
     await saveStarted;
     const key = page.locator('#schema-editor [data-property="key"]');
     await key.fill('pending-after-failure');
@@ -891,8 +896,8 @@ test('an activation failure retains the new draft revision and pending input',
       .document.messages[0].indexes[0].key).toBe('pending-after-failure');
     await expect(page.locator('#save-status')).toHaveText('Changes saved');
     const saved = await state(request);
-    expect(saved.draft.schemas[0].document.messages[0].indexes[0].number_of_bits)
-      .toBe(16);
+    expect(saved.draft.schemas[0].document.messages[0].indexes[0].index_number)
+      .toBe('3.');
     expect(saved.active_revision).toBe(saved.draft_revision);
     await expect(page.locator('#toast')).not.toContainText('another window');
   });
@@ -921,3 +926,283 @@ test('question-mark help supports hover, focus, click and Escape', async ({ page
   await help.click();
   await expect(tooltip).toBeHidden();
 });
+
+
+async function payloadDefinition(page, id = 'payload') {
+  await page.locator('[data-tab="schemas"]').click();
+  await page.locator('#schema-list [data-schema-id="' + id + '"]').click();
+}
+async function payloadStep(page, name) {
+  await page.locator('#schema-editor > div > .guided-form > .guided-steps')
+    .getByRole('button', {name, exact: true}).click();
+}
+async function payloadDraft(request, document = schema, outputs = []) {
+  const current = await state(request);
+  expect((await request.post('/api/state', {data: {
+    revision: current.draft_revision,
+    workspace: {...empty, schemas: [{id: 'payload', document}], outputs},
+  }})).ok()).toBeTruthy();
+}
+
+test('guided payload encoding changes remove dependent settings in one undo',
+  async ({page, request}) => {
+    const document = JSON.parse(JSON.stringify(schema));
+    Object.assign(document.messages[0].indexes[0], {
+      number_of_bits: 32, encode_type: 'scaled',
+      representation: 'twos_complement',
+      scale: {factor: {numerator: 1, denominator: 100},
+        bias: {numerator: 0, denominator: 1}},
+      constant: 1, allowed: [{first: 0, last: 100}],
+    });
+    await payloadDraft(request, document);
+    await page.goto('/'); await payloadDefinition(page);
+    await page.locator('.tree-select.field').first().click();
+    await payloadStep(page, '2. Encoding');
+    await page.locator('#schema-editor [data-property="encode_type"]')
+      .selectOption('text');
+    await expect(page.locator('.guided-explanation')).toContainText('scale');
+    await saved(page);
+    let field = (await state(request)).draft.schemas[0].document.messages[0].indexes[0];
+    expect(field.encode_type).toBe('text');
+    for (const key of ['scale', 'representation', 'constant', 'allowed', 'number_of_bits']) {
+      expect(field).not.toHaveProperty(key);
+    }
+    await payloadStep(page, '3. Size & length');
+    const width = page.locator('#schema-editor [data-property="number_of_bits"]');
+    await width.fill('14'); await width.press('Tab'); await saved(page);
+    await payloadStep(page, '4. Constraints');
+    await expect(page.getByRole('button', {name: '+ Add Scale', exact: true}))
+      .toHaveCount(0);
+    await page.locator('#schema-undo').click(); await saved(page);
+    await page.locator('#schema-undo').click(); await saved(page);
+    field = (await state(request)).draft.schemas[0].document.messages[0].indexes[0];
+    expect(field).toEqual(document.messages[0].indexes[0]);
+    await page.reload();
+    expect((await state(request)).draft.schemas[0].document).toEqual(document);
+  });
+
+test('schema envelope filters standards and undo restores exact selectors',
+  async ({page, request}) => {
+    const document = JSON.parse(JSON.stringify(schema));
+    document.messages[0].message_standard = 'MIL-STD-6017A';
+    await payloadDraft(request, document);
+    await page.goto('/'); await payloadDefinition(page);
+    await page.locator('#schema-editor [data-property="envelope"]').selectOption('B');
+    await saved(page);
+    let next = (await state(request)).draft.schemas[0].document;
+    expect(next).not.toHaveProperty('standard_version');
+    expect(next.messages[0]).not.toHaveProperty('message_standard');
+    await page.locator('#schema-undo').click(); await saved(page);
+    expect((await state(request)).draft.schemas[0].document).toEqual(document);
+    await payloadStep(page, '2. Standard');
+    await page.locator('[data-property="standard_selection"]').selectOption('raw');
+    await page.locator('#schema-editor [data-property="standard_version"]').selectOption('9');
+    await saved(page);
+    expect((await state(request)).draft.schemas[0].document.standard_version).toBe(9);
+    await page.locator('[data-property="standard_selection"]').selectOption('edition');
+    await expect(page.locator('[data-property="message_standard"] option').filter({hasText: 'MIL-STD-6017D'})).toHaveCount(0);
+  });
+
+test('nested repeat steps filter fixed versus scalar properties and undo them',
+  async ({page, request}) => {
+    const document = JSON.parse(JSON.stringify(schema));
+    document.messages[0].indexes[1].repeat_code = 'R1';
+    document.messages[0].repeats = [{repeat_code: 'R1', count: 2}];
+    await payloadDraft(request, document);
+    await page.goto('/'); await payloadDefinition(page);
+    await page.locator('.tree-message > .tree-select:not(.field)').click();
+    await payloadStep(page, '2. Packing');
+    await payloadStep(page, '3. Repeats');
+    await page.getByLabel('Repeat count mechanism', {exact: true}).selectOption('scalar');
+    const nested = page.locator('.guided-array .guided-form').first();
+    await nested.getByRole('button', {name: '2. Source & bounds', exact: true}).click();
+    await expect(nested.locator('[data-property="count"]')).toHaveCount(0);
+    const source = nested.locator('[data-property="count_from"]');
+    await source.fill('1.'); await source.press('Tab');
+    const maximum = nested.locator('[data-property="maximum"]');
+    await maximum.fill('4'); await maximum.press('Tab'); await saved(page);
+    expect((await state(request)).draft.schemas[0].document.messages[0].repeats)
+      .toEqual([{repeat_code: 'R1', count_from: '1.', maximum: 4}]);
+    for (let index = 0; index < 3; index++) await page.locator('#schema-undo').click();
+    await saved(page);
+    expect((await state(request)).draft.schemas[0].document.messages[0].repeats)
+      .toEqual([{repeat_code: 'R1', count: 2}]);
+  });
+
+test('schema undo preserves unrelated mapping edits and restores cascade deletion',
+  async ({page, request}) => {
+    const related = output('related', {schema: 'payload'});
+    const unrelated = output('unrelated', {schema: 'missing', name: 'before'});
+    await payloadDraft(request, schema, [related, unrelated]);
+    await page.goto('/'); await payloadDefinition(page);
+    await page.locator('#delete-schema').click(); await saved(page);
+    await page.locator('[data-tab="mapping"]').click();
+    await page.locator('#output-list [data-output-id="unrelated"]').click();
+    const name = page.locator('#mapping-editor [data-property="name"]');
+    await name.fill('intervening edit'); await name.press('Tab'); await saved(page);
+    await page.locator('[data-tab="schemas"]').click();
+    await page.locator('#schema-undo').click(); await saved(page);
+    const next = (await state(request)).draft;
+    expect(next.schemas[0].id).toBe('payload');
+    expect(next.outputs.find(item => item.id === 'related')).toEqual(related);
+    expect(next.outputs.find(item => item.id === 'unrelated').mapping.name)
+      .toBe('intervening edit');
+  });
+
+test('undo importing a schema removes outputs created for it and keeps others',
+  async ({page, request}) => {
+    await payloadDraft(request, schema, [output('retained')]);
+    await page.goto('/');
+    await page.locator('[data-tab="schemas"]').click();
+    await page.locator('#import-schema').setInputFiles({
+      name: 'new-import.json', mimeType: 'application/json',
+      buffer: Buffer.from(JSON.stringify(schema)),
+    });
+    await saved(page);
+    await page.locator('[data-tab="mapping"]').click();
+    await page.locator('.message-group:has(.target-port[data-schema-id="new-import"]) .message-info').click();
+    await saved(page);
+    expect((await state(request)).draft.outputs).toHaveLength(2);
+    await page.locator('[data-tab="schemas"]').click();
+    await page.locator('#schema-undo').click(); await saved(page);
+    const next = (await state(request)).draft;
+    expect(next.schemas.map(item => item.id)).toEqual(['payload']);
+    expect(next.outputs.map(item => item.id)).toEqual(['retained']);
+  });
+
+
+test('nested condition steps save raw ranges and retain completed navigation',
+  async ({page, request}) => {
+    await payloadDraft(request);
+    await page.goto('/'); await payloadDefinition(page);
+    await page.locator('.tree-select.field').nth(1).click();
+    for (const step of ['2. Encoding', '3. Size & length', '4. Constraints',
+      '5. Structure & condition']) await payloadStep(page, step);
+    await page.getByRole('button', {name: '+ Add When', exact: true}).click();
+    const condition = page.locator('[data-guided-form$="/when"]');
+    await condition.getByRole('button', {name: '2. Terms', exact: true}).click();
+    await condition.getByRole('button', {name: '+ Add term', exact: true}).click();
+    const term = page.locator('[data-guided-form$="/when/terms/0"]');
+    const source = term.locator('[data-property="field"]');
+    await source.fill('1.'); await source.press('Tab');
+    await term.getByRole('button', {name: '2. Raw values', exact: true}).click();
+    await term.getByRole('button', {name: '+ Add item', exact: true}).click();
+    const last = term.locator('[data-property="last"]');
+    await last.fill('1'); await last.press('Tab');
+    await term.getByRole('button', {name: '3. Mask & negation', exact: true}).click();
+    await term.getByRole('button', {name: '+ Add Negate', exact: true}).click();
+    await term.locator('[data-property="negate"]').check(); await saved(page);
+    await term.getByRole('button', {name: '1. Source', exact: true}).click();
+    await term.getByRole('button', {name: '3. Mask & negation', exact: true}).click();
+    await expect(term.locator('[data-property="negate"]')).toBeChecked();
+    const expected = {mode: 'all', terms: [
+      {field: '1.', values: [{first: 0, last: 1}], negate: true},
+    ]};
+    expect((await state(request)).draft.schemas[0].document.messages[0]
+      .indexes[1].when).toEqual(expected);
+    expect((await state(request)).valid).toBe(true);
+    await page.reload();
+    expect((await state(request)).draft.schemas[0].document.messages[0]
+      .indexes[1].when).toEqual(expected);
+  });
+
+test('switching a data field to an indicator prunes refinements in one undo',
+  async ({page, request}) => {
+    const document = JSON.parse(JSON.stringify(schema));
+    Object.assign(document.messages[0].indexes[0], {
+      number_of_bits: 32, encode_type: 'scaled',
+      representation: 'twos_complement', bit_order: 'msb_first',
+      scale: {factor: {numerator: 1, denominator: 10},
+        bias: {numerator: 0, denominator: 1}},
+      allowed: [{first: 0, last: 10}], constant: 1,
+    });
+    await payloadDraft(request, document);
+    await page.goto('/'); await payloadDefinition(page);
+    await page.locator('.tree-select.field').first().click();
+    await page.locator('#schema-editor [data-property="indicator"]')
+      .selectOption('fpi'); await saved(page);
+    let current = (await state(request)).draft.schemas[0].document.messages[0].indexes[0];
+    expect(current).toEqual({index_number: '1.', key: 'sent',
+      number_of_bits: 1, indicator: 'fpi'});
+    await payloadStep(page, '2. Controller');
+    await expect(page.locator('#schema-editor [data-property="target"]')).toHaveCount(1);
+    await expect(page.locator('#schema-editor [data-property="encode_type"]')).toHaveCount(0);
+    await page.locator('#schema-undo').click(); await saved(page);
+    current = (await state(request)).draft.schemas[0].document.messages[0].indexes[0];
+    expect(current).toEqual(document.messages[0].indexes[0]);
+    expect((await state(request)).valid).toBe(true);
+  });
+
+test('invalid imported boolean and indicator widths have undoable one-bit repair',
+  async ({page, request}) => {
+    const document = JSON.parse(JSON.stringify(schema));
+    document.messages[0].indexes = [
+      {index_number: '1.', indicator: 'fpi', number_of_bits: 2, target: '2.'},
+      {index_number: '2.', encode_type: 'bool', number_of_bits: 0},
+    ];
+    await payloadDraft(request, document);
+    await page.goto('/'); await payloadDefinition(page);
+    await page.locator('.tree-select.field').first().click();
+    await payloadStep(page, '2. Controller');
+    await page.getByRole('button', {name: 'Use one-bit width', exact: true}).click();
+    await saved(page);
+    expect((await state(request)).draft.schemas[0].document.messages[0]
+      .indexes[0].number_of_bits).toBe(1);
+    await page.locator('.tree-select.field').nth(1).click();
+    await payloadStep(page, '2. Encoding');
+    await payloadStep(page, '3. Size & length');
+    await page.getByRole('button', {name: 'Use one-bit width', exact: true}).click();
+    await saved(page);
+    expect((await state(request)).valid).toBe(true);
+    await page.locator('#schema-undo').click(); await saved(page);
+    expect((await state(request)).draft.schemas[0].document.messages[0]
+      .indexes[1].number_of_bits).toBe(0);
+    expect((await state(request)).valid).toBe(false);
+    await page.getByRole('button', {name: 'Use one-bit width', exact: true}).click();
+    await saved(page);
+    expect((await state(request)).valid).toBe(true);
+  });
+
+test('ordinary property edits preserve untouched inactive imported settings',
+  async ({page, request}) => {
+    const document = JSON.parse(JSON.stringify(schema));
+    Object.assign(document.messages[0].indexes[0], {
+      text_encoding: 'ascii_8',
+      scale: {factor: {numerator: 1, denominator: 2},
+        bias: {numerator: 0, denominator: 1}},
+    });
+    await payloadDraft(request, document);
+    await page.goto('/'); await payloadDefinition(page);
+    const initialRevision = (await state(request)).draft_revision;
+    await page.locator('.tree-select.field').first().click();
+    await expect(page.getByText('Review saved settings (2)', {exact: true})).toBeVisible();
+    expect((await state(request)).draft_revision).toBe(initialRevision);
+    await page.getByRole('button', {name: 'Remove Key', exact: true}).click();
+    await saved(page);
+    let current = (await state(request)).draft.schemas[0].document.messages[0].indexes[0];
+    expect(current).not.toHaveProperty('key');
+    expect(current.text_encoding).toBe('ascii_8');
+    expect(current.scale).toEqual(document.messages[0].indexes[0].scale);
+    await page.locator('#schema-undo').click(); await saved(page);
+    current = (await state(request)).draft.schemas[0].document.messages[0].indexes[0];
+    expect(current).toEqual(document.messages[0].indexes[0]);
+  });
+
+test('field and message deletion undo restores native definitions',
+  async ({page, request}) => {
+    await payloadDraft(request);
+    await page.goto('/'); await payloadDefinition(page);
+    await page.locator('.tree-select.field').first().click();
+    await page.getByRole('button', {name: 'Delete field', exact: true}).click();
+    await saved(page);
+    expect((await state(request)).draft.schemas[0].document.messages[0].indexes)
+      .toHaveLength(1);
+    await page.locator('#schema-undo').click(); await saved(page);
+    expect((await state(request)).draft.schemas[0].document).toEqual(schema);
+    await page.locator('.tree-message > .tree-select:not(.field)').click();
+    await page.getByRole('button', {name: 'Delete message', exact: true}).click();
+    await saved(page);
+    expect((await state(request)).draft.schemas[0].document.messages).toEqual([]);
+    await page.locator('#schema-undo').click(); await saved(page);
+    expect((await state(request)).draft.schemas[0].document).toEqual(schema);
+  });

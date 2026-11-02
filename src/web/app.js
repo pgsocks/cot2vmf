@@ -447,14 +447,472 @@ function renderSchemas() {
     tree.append(group);
   });
 }
+// Payload authoring keeps native documents exact and UI state outside them.
+const schemaUndoHistory = [];
+const schemaSteps = new Map();
+const schemaStepReach = new Map();
+let schemaExplanation = "";
+const guidedOwn = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
+const guidedLabel = key => key.replace(/_/g, " ").replace(/^./, char => char.toUpperCase());
+const guidedControllerKeys = ["indicator", "encode_type", "representation", "text_encoding", "length_from"];
+const guidedScalarTypes = ["default", "bool", "unsigned", "signed", "enum", "scaled"];
+const guidedStandardNames = {
+  C: ["MIL-STD-6017", "MIL-STD-6017A", "MIL-STD-6017B", "MIL-STD-6017C", "TIDP-TE-R2", "TIDP-TE-R3", "TIDP-TE-R4", "TIDP-TE-R5", "TIDP-TE-R6", "TIDP-TE-R7"],
+  D: ["MIL-STD-6017", "MIL-STD-6017A", "MIL-STD-6017B", "MIL-STD-6017C", "MIL-STD-6017D", "MIL-STD-6017E", "TIDP-TE-R2", "TIDP-TE-R3", "TIDP-TE-R4", "TIDP-TE-R5", "TIDP-FTE-R6"]
+};
+function resetSchemaHistory() {
+  schemaUndoHistory.length = 0; schemaSteps.clear(); schemaStepReach.clear(); schemaExplanation = "";
+}
+function schemaSelection() {
+  return {schema: selectedSchema, message: selectedMessage, index: selectedIndex};
+}
+function schemaChange(label, action, refresh = true) {
+  const before = clone(workspace.schemas), selection = schemaSelection();
+  const steps = [...schemaSteps], reach = [...schemaStepReach];
+  const outputs = draftOutputs().map((entry, index) => ({entry, index}));
+  action();
+  if (json(before) === json(workspace.schemas)) return false;
+  const removedOutputs = outputs.filter(({entry}) => !workspace.outputs.includes(entry))
+    .map(({entry, index}) => ({entry: clone(entry), index}));
+  schemaUndoHistory.push({label, schemas: before, selection, removedOutputs, steps, reach});
+  changed();
+  if (refresh) render();
+  else { renderSchemas(); updateSchemaUndo(); scheduleWires(); }
+  return true;
+}
+function updateSchemaUndo() {
+  const node = $("schema-undo");
+  if (!node) return;
+  const entry = schemaUndoHistory[schemaUndoHistory.length - 1];
+  node.disabled = !entry;
+  node.textContent = entry ? "Undo: " + entry.label : "Undo";
+}
+function undoSchemaChange() {
+  if ($("schema-editor").contains(document.activeElement)) document.activeElement.blur();
+  const entry = schemaUndoHistory.pop(); if (!entry) return;
+  const restored = new Set(entry.schemas.map(schema => schema.id));
+  const removed = new Set(draftSchemas().filter(schema => !restored.has(schema.id)).map(schema => schema.id));
+  workspace.outputs = draftOutputs().filter(output => !removed.has(output.mapping?.schema));
+  for (const {entry: output, index} of entry.removedOutputs) {
+    if (!workspace.outputs.some(current => current.id === output.id)) workspace.outputs.splice(Math.min(index, workspace.outputs.length), 0, clone(output));
+  }
+  workspace.schemas = clone(entry.schemas);
+  selectedSchema = entry.selection.schema;
+  selectedMessage = entry.selection.message; selectedIndex = entry.selection.index;
+  selectedWire = selectedOutput = null;
+  schemaSteps.clear(); schemaStepReach.clear();
+  for (const [key, value] of entry.steps) schemaSteps.set(key, value);
+  for (const [key, value] of entry.reach) schemaStepReach.set(key, value);
+  schemaExplanation = "Undid " + entry.label + ". Edits will be saved automatically.";
+  changed(); render();
+}
+function guidedHelp(name, description) {
+  return typeof helpButton === "function" ? helpButton(name, description) : el("span", "property-help", description);
+}
+function guidedNote(container, text) { container.append(el("p", "property-help", text)); }
+function guidedRemove(owner, keys, removed) {
+  for (const key of keys) if (guidedOwn(owner, key)) { delete owner[key]; removed.push(key); }
+}
+function guidedPruneStandard(owner, envelope, removed) {
+  const names = envelope === "B" ? [] : guidedStandardNames[envelope === "C" ? "C" : "D"] || [];
+  if (guidedOwn(owner, "message_standard") && !names.includes(owner.message_standard)) guidedRemove(owner, ["message_standard"], removed);
+  if (guidedOwn(owner, "standard_version")) {
+    const value = owner.standard_version;
+    const valid = value === "absent" ? envelope === "B" || envelope === "C" : Number.isInteger(value) && value >= 0 && value <= (envelope === "C" ? 9 : 10) && envelope !== "B";
+    if (!valid) guidedRemove(owner, ["standard_version"], removed);
+  }
+}
+function guidedIndexKeys(field) {
+  const keys = ["index_number", "number_of_bits", "key", "group_code", "repeat_code", "indicator"];
+  const role = field.indicator || "none", type = field.encode_type || "default";
+  if (role !== "none") {
+    if (role === "fpi" || role === "gpi") keys.push("target");
+    return keys;
+  }
+  keys.push("encode_type", "when");
+  if (guidedScalarTypes.includes(type)) {
+    keys.push("representation", "bit_order", "allowed", "constant");
+    if (type === "scaled") keys.push("scale");
+  } else if (["bits", "octets", "text", "literal"].includes(type)) {
+    if (type !== "bits") keys.push("bit_order");
+    if (type === "text" || type === "literal") keys.push("text_encoding");
+    if (type !== "literal") {
+      keys.push("length_from");
+      if (guidedOwn(field, "length_from")) keys.push("length_bias");
+    }
+  }
+  return keys;
+}
+function guidedPruneField(field, removed) {
+  const known = Object.keys(indexSpec.properties), applicable = guidedIndexKeys(field);
+  guidedRemove(field, known.filter(key => !applicable.includes(key)), removed);
+  const role = field.indicator || "none", type = field.encode_type || "default";
+  if (role !== "none") {
+    if (field.number_of_bits !== 1) { field.number_of_bits = 1; removed.push("previous width (indicators use one bit)"); }
+    if (field.target && ((role === "gpi") !== /^G/.test(field.target))) guidedRemove(field, ["target"], removed);
+    return;
+  }
+  if (guidedScalarTypes.includes(type) && guidedOwn(field, "representation")) {
+    const choices = type === "signed" ? ["twos_complement", "ones_complement", "sign_magnitude"] : type === "scaled" ? ["default", "unsigned", "twos_complement", "ones_complement", "sign_magnitude"] : ["default", "unsigned"];
+    if (!choices.includes(field.representation)) guidedRemove(field, ["representation"], removed);
+  }
+  if (type === "scaled" && !field.scale) field.scale = {factor: {numerator: 1, denominator: 1}, bias: {numerator: 0, denominator: 1}};
+  if (type === "bool" && field.number_of_bits !== 1) { field.number_of_bits = 1; removed.push("previous width (booleans use one bit)"); }
+  if (type === "literal" && field.text_encoding && !["default", "ascii_7"].includes(field.text_encoding)) guidedRemove(field, ["text_encoding"], removed);
+  if (guidedOwn(field, "number_of_bits")) {
+    const width = field.number_of_bits, unit = type === "octets" ? 8 : type === "literal" || type === "text" && (!field.text_encoding || ["default", "ascii_7"].includes(field.text_encoding)) ? 7 : type === "text" ? 8 : 1;
+    const valid = Number.isInteger(width) || typeof width === "bigint";
+    if (valid && (BigInt(width) < 0n || BigInt(width) % BigInt(unit) || type === "bool" && BigInt(width) !== 1n || guidedScalarTypes.includes(type) && (BigInt(width) < BigInt(type === "signed" || ["twos_complement", "ones_complement", "sign_magnitude"].includes(field.representation) ? 2 : 1) || BigInt(width) > 64n) || !guidedScalarTypes.includes(type) && type !== "literal" && !field.length_from && BigInt(width) === 0n)) guidedRemove(field, ["number_of_bits"], removed);
+  }
+}
+function guidedController(label, action) {
+  const removed = [];
+  schemaChange(label, () => { action(removed); schemaExplanation = removed.length ? "Removed settings incompatible with this choice: " + [...new Set(removed)].join(", ") + ". Use Undo to restore the previous choice and its settings." : ""; });
+}
+function guidedDefault(spec, key) {
+  if (key === "scale") return {factor: {numerator: 1, denominator: 1}, bias: {numerator: 0, denominator: 1}};
+  return initial(spec);
+}
+function guidedInteger(source) {
+  if (!/^-?(?:0|[1-9]\d*)$/.test(source)) throw new Error("Enter an integer without decimals or exponents.");
+  const value = parseJSON(source);
+  if (BigInt(value) < -9223372036854775808n || BigInt(value) > 18446744073709551615n) throw new Error("Enter an integer in the native 64-bit range.");
+  return value;
+}
+function guidedCheckInteger(key, next, owner, context) {
+  const value = BigInt(next);
+  const signed = ["numerator", "length_bias", "bias"].includes(key);
+  if (!signed && value < 0n) throw new Error("Enter an unsigned integer.");
+  if (signed && value > 9223372036854775807n) throw new Error("Enter a signed 64-bit integer.");
+  if (key === "denominator" && value === 0n) throw new Error("Denominator must be nonzero.");
+  if (key === "subtype" && value > 127n) throw new Error("Subtype must be between 0 and 127.");
+  if (key === "number_of_bits") {
+    const type = owner.encode_type || "default", role = owner.indicator || "none";
+    if (role !== "none" && value !== 1n) throw new Error("Indicators use one bit.");
+    if (type === "bool" && value !== 1n) throw new Error("Boolean fields use one bit.");
+    if (guidedScalarTypes.includes(type) && (value < BigInt(type === "signed" || ["twos_complement", "ones_complement", "sign_magnitude"].includes(owner.representation) ? 2 : 1) || value > 64n)) throw new Error("Enter a scalar width between its representation minimum and 64 bits.");
+    const unit = type === "octets" ? 8n : type === "literal" || type === "text" && (!owner.text_encoding || ["default", "ascii_7"].includes(owner.text_encoding)) ? 7n : type === "text" ? 8n : 1n;
+    if (value % unit) throw new Error("Capacity must be divisible by " + unit + " bits.");
+    if (!guidedScalarTypes.includes(type) && type !== "literal" && !owner.length_from && value === 0n) throw new Error("Fixed capacity must be positive. Zero is allowed with a length source or literal encoding.");
+  }
+}
+function guidedField(owner, key, spec, path, context = {}, options = {}) {
+  const row = el("div", "property guided-property"); row.dataset.propertyName = key;
+  const name = el("div", "property-label"); name.append(el("label", "", guidedLabel(key)));
+  if (options.help) name.append(guidedHelp(key, options.help));
+  if (!options.required && guidedOwn(owner, key)) name.append(button("Remove " + guidedLabel(key), () => {
+    guidedController("remove " + guidedLabel(key), removed => { delete owner[key]; if (context.field === owner && guidedControllerKeys.includes(key)) guidedPruneField(owner, removed); });
+  }, "remove-property"));
+  row.append(name);
+  if (!guidedOwn(owner, key) && !options.required) {
+    row.append(button("+ Add " + guidedLabel(key), () => {
+      guidedController("add " + guidedLabel(key), removed => { owner[key] = guidedDefault(spec, key); if (context.field === owner && guidedControllerKeys.includes(key)) guidedPruneField(owner, removed); });
+    }));
+    return row;
+  }
+  const current = guidedOwn(owner, key) ? owner[key] : options.defaultValue;
+  if (spec.kind === "object" || spec.kind === "array") {
+    if (options.required && (spec.kind === "object" ? !isObject(current) : !Array.isArray(current))) row.dataset.requiredInvalid = "true";
+    row.append(guidedValue(current, spec, next => { owner[key] = next; }, path + "/" + key, context));
+    return row;
+  }
+  const validType = current === undefined || spec.kind === "enum" ? current === undefined || spec.kind !== "enum" || spec.values.includes(current) : spec.kind === "integer" ? (typeof current === "bigint" || Number.isSafeInteger(current)) : spec.kind === "boolean" ? typeof current === "boolean" : typeof current === "string";
+  if (!validType) { if (options.required) row.dataset.requiredInvalid = "true"; row.append(guidedRepairValue(current, spec, next => { owner[key] = next; if (context.field === owner && guidedControllerKeys.includes(key)) guidedPruneField(owner, []); }, path + "/" + key, context)); return row; }
+  let input;
+  if (spec.kind === "enum") {
+    input = el("select");
+    if (current === undefined) input.add(new Option("Choose…", ""));
+    for (const option of spec.values) input.add(new Option(String(option), String(option)));
+    input.value = current === undefined ? "" : String(current);
+  } else {
+    input = el("input"); input.type = spec.kind === "boolean" ? "checkbox" : "text";
+    if (spec.kind === "boolean") input.checked = current || false;
+    else input.value = current === undefined ? "" : String(current);
+    if (spec.kind === "integer") input.inputMode = "numeric";
+    input.spellcheck = false;
+  }
+  input.dataset.property = key; input.setAttribute("aria-label", key);
+  input.required = !!options.required;
+  if (current !== undefined && spec.kind === "integer") {
+    try { guidedCheckInteger(key, guidedInteger(String(current)), owner, context); }
+    catch (error) { input.setCustomValidity(error.message); }
+  }
+  input.addEventListener("input", () => input.setCustomValidity(""));
+  input.addEventListener("change", () => {
+    try {
+      let next = spec.kind === "boolean" ? input.checked : spec.kind === "enum" ? spec.values.find(option => String(option) === input.value) : input.value;
+      if (spec.kind === "integer") { next = guidedInteger(input.value); guidedCheckInteger(key, next, owner, context); }
+      if (options.required && next === "") throw new Error("Enter " + guidedLabel(key).toLowerCase() + ".");
+      if (key === "message_number" && !/^K(?:0?[0-9]|10)\.(?:[1-9]|[1-9][0-9]|1[01][0-9]|12[0-7])$/.test(next)) throw new Error("Enter a K-number with functional area 0–10 and message number 1–127, such as K01.1.");
+      input.setCustomValidity("");
+      if (options.controller) guidedController("change " + guidedLabel(key), removed => {
+        owner[key] = next;
+        if (options.setValue) options.setValue(next);
+        if (key === "envelope") {
+          guidedPruneStandard(owner, next, removed);
+          for (const msg of Array.isArray(owner.messages) ? owner.messages : []) if (isObject(msg)) guidedPruneStandard(msg, next, removed);
+        }
+        if (context.field === owner && guidedControllerKeys.includes(key)) guidedPruneField(owner, removed);
+        if (options.after) options.after(removed);
+      });
+      else schemaChange("change " + guidedLabel(key), () => { owner[key] = next; if (options.setValue) options.setValue(next); }, false);
+    } catch (error) { input.setCustomValidity(error.message); input.reportValidity(); }
+  });
+  row.append(input); return row;
+}
+function guidedFields(target, owner, spec, keys, path, context, required = spec.required || []) {
+  for (const key of keys) target.append(guidedField(owner, key, spec.properties[key], path, context, {required: required.includes(key)}));
+}
+function guidedRepairValue(value, spec, set, path, context) {
+  const node = el("div", "guided-repair");
+  guidedNote(node, "This saved value needs repair. It stays unchanged until you replace it.");
+  node.append(el("code", "repair-value", json(value) ?? "Missing"), button("Replace with " + spec.kind, () => schemaChange("repair value", () => set(guidedDefault(spec, path.split("/").pop())))));
+  return node;
+}
+function guidedRepairProperties(target, value, spec, applicable, path, context) {
+  const keys = Object.keys(value).filter(key => !applicable.includes(key));
+  if (!keys.length) return;
+  const repair = el("details", "guided-repair"); repair.append(el("summary", "", "Review saved settings (" + keys.length + ")"));
+  guidedNote(repair, "These settings are unknown or do not apply to the current choices. They are preserved until you edit or remove them.");
+  for (const key of keys) {
+    const row = el("div", "property"); row.append(el("code", "", key), el("code", "repair-value", json(value[key])), button("Remove " + key, () => schemaChange("remove " + key, () => { delete value[key]; })));
+    repair.append(row);
+  }
+  target.append(repair);
+}
+function guidedStepper(path, stages) {
+  const node = el("section", "guided-form"); node.dataset.guidedForm = path;
+  let step = Math.min(schemaSteps.get(path) || 0, stages.length - 1);
+  schemaSteps.set(path, step);
+  const reached = Math.max(schemaStepReach.get(path) || 0, step);
+  schemaStepReach.set(path, reached);
+  const navigation = el("nav", "guided-steps"); navigation.setAttribute("aria-label", "Form steps");
+  const body = el("div", "guided-step-body");
+  function advance(next) {
+    if (next > step) {
+      const invalid = body.querySelector('[data-required-invalid="true"]');
+      if (invalid) { message("Complete or repair the required settings in this step before continuing.", true); invalid.scrollIntoView({block: "nearest"}); invalid.querySelector("button")?.focus(); return; }
+      for (const input of body.querySelectorAll("input, select")) if (!input.checkValidity()) { input.reportValidity(); return; }
+    }
+    schemaSteps.set(path, next); renderSchemaEditor();
+  }
+  stages.forEach((stage, index) => {
+    const control = button((index + 1) + ". " + stage.title, () => advance(index), "guided-step" + (index === step ? " selected" : ""));
+    control.disabled = index > reached + 1;
+    if (index === step) control.setAttribute("aria-current", "step");
+    navigation.append(control);
+  });
+  node.append(navigation); stages[step].render(body); node.append(body);
+  const actions = el("div", "button-row guided-navigation");
+  const back = button("Back", () => advance(step - 1)); back.disabled = !step;
+  actions.append(back);
+  if (step < stages.length - 1) actions.append(button("Next", () => advance(step + 1), "button small primary"));
+  else actions.append(el("span", "property-help", "Edits save automatically."));
+  node.append(actions); return node;
+}
+function guidedStandard(target, owner, path, envelope, isMessage) {
+  const names = envelope === "B" ? [] : guidedStandardNames[envelope === "C" ? "C" : "D"] || [];
+  const hasNamed = guidedOwn(owner, "message_standard"), hasRaw = guidedOwn(owner, "standard_version");
+  const mode = hasNamed && hasRaw ? "conflict" : hasNamed ? "edition" : hasRaw ? owner.standard_version === "absent" ? "absent" : "raw" : "inherit";
+  const row = el("div", "property"), select = el("select");
+  select.setAttribute("aria-label", "Standard selection"); select.dataset.property = "standard_selection";
+  select.add(new Option(isMessage ? "Inherit schema selection" : "No shared standard selection", "inherit"));
+  if (envelope === "B" || envelope === "C") select.add(new Option("Explicitly absent", "absent"));
+  if (names.length) { select.add(new Option("Named edition", "edition")); select.add(new Option("Raw version code", "raw")); }
+  if (![...select.options].some(option => option.value === mode)) select.add(new Option("Saved selection needs repair", mode));
+  select.value = mode;
+  row.append(el("label", "property-label", "Standard selection"), select); target.append(row);
+  select.addEventListener("change", () => schemaChange("change standard selection", () => {
+    delete owner.message_standard; delete owner.standard_version;
+    if (select.value === "edition") owner.message_standard = names[0];
+    else if (select.value === "raw") owner.standard_version = 0;
+    else if (select.value === "absent") owner.standard_version = "absent";
+    schemaExplanation = "The standard selection replaces its previous selection as one edit. Use Undo to restore it.";
+  }));
+  if (hasNamed) target.append(guidedField(owner, "message_standard", {kind: "enum", values: names}, path, {}, {required: true}));
+  if (hasRaw && owner.standard_version !== "absent") {
+    const codes = Array.from({length: envelope === "C" ? 10 : envelope === "B" ? 0 : 11}, (_, index) => index);
+    const control = guidedField(owner, "standard_version", {kind: "enum", values: codes}, path, {}, {required: true});
+    // Native version codes are numbers, despite HTML option values being strings.
+    const input = control.querySelector("select");
+    if (input) input.addEventListener("change", () => { if (typeof owner.standard_version === "string" && /^\d+$/.test(owner.standard_version)) owner.standard_version = Number(owner.standard_version); });
+    target.append(control);
+  }
+  if (mode === "conflict") guidedNote(target, "Choose one selection mechanism to replace these conflicting saved properties.");
+  guidedNote(target, envelope === "B" ? "Envelope B carries no standard version." : envelope === "C" ? "C supports an absent version or codes 0–9." : "D and D1 require a resolved version for each message. Select a shared version or override it on every message.");
+}
+function guidedValue(value, spec, set, path, context = {}) {
+  if (spec.kind === "array") {
+    if (!Array.isArray(value)) return guidedRepairValue(value, spec, set, path, context);
+    const node = el("div", "guided-array");
+    value.forEach((item, index) => {
+      const row = el("section", "array-item"), heading = el("div", "array-heading");
+      heading.append(el("strong", "", "Item " + (index + 1)));
+      const actions = el("div", "array-actions");
+      const up = button("Move item up", () => schemaChange("move item", () => { [value[index - 1], value[index]] = [value[index], value[index - 1]]; })); up.disabled = index === 0;
+      const down = button("Move item down", () => schemaChange("move item", () => { [value[index + 1], value[index]] = [value[index], value[index + 1]]; })); down.disabled = index === value.length - 1;
+      actions.append(up, down, button("Delete item", () => schemaChange("delete item", () => value.splice(index, 1)), "text-button danger"));
+      heading.append(actions); row.append(heading);
+      if (spec.item.kind === "object" || spec.item.kind === "array") row.append(guidedValue(item, spec.item, next => { value[index] = next; }, path + "/" + index, context));
+      else {
+        const owner = {value: item};
+        const control = guidedField(owner, "value", spec.item, path + "/" + index, context, {required: true, setValue: next => { value[index] = next; }});
+        row.append(control);
+      }
+      node.append(row);
+    });
+    node.append(button("+ Add item", () => schemaChange("add item", () => value.push(guidedDefault(spec.item, path.split("/").pop())))));
+    return node;
+  }
+  if (!isObject(value)) return guidedRepairValue(value, spec, set, path, context);
+  if (spec === schemaSpec) return guidedSchema(value, path);
+  if (spec === nativeMessageSpec) return guidedMessage(value, path);
+  if (spec === indexSpec) return guidedIndex(value, path, context);
+  if (spec === repeatSpec) return guidedRepeat(value, path, context);
+  if (spec === conditionSpec) return guidedCondition(value, path, context);
+  const node = el("div", "object-editor");
+  guidedFields(node, value, spec, Object.keys(spec.properties), path, context);
+  guidedRepairProperties(node, value, spec, Object.keys(spec.properties), path, context);
+  return node;
+}
+function guidedMalformedItems(target, value, spec, path, context) {
+  value.forEach((item, index) => {
+    if (isObject(item)) return;
+    const row = el("div", "guided-repair");
+    row.append(el("strong", "", "Repair item " + (index + 1)), guidedRepairValue(item, spec, next => { value[index] = next; }, path + "/" + index, context), button("Delete malformed item", () => schemaChange("delete malformed item", () => value.splice(index, 1)), "text-button danger"));
+    target.append(row);
+  });
+}
+function guidedSchema(value, path) {
+  const node = el("div");
+  node.append(guidedStepper(path, [
+    {title: "Envelope", render: target => { guidedNote(target, "The envelope determines which standard selections and headers are valid."); target.append(guidedField(value, "envelope", schemaSpec.properties.envelope, path, {}, {required: true, controller: true})); target.append(guidedField(value, "format", schemaSpec.properties.format, path, {}, {required: true})); }},
+    {title: "Standard", render: target => guidedStandard(target, value, path, value.envelope, false)},
+    {title: "Messages", render: target => { guidedNote(target, "Use + Message and the outline to edit message identities, fields, and repeat definitions."); if (!Array.isArray(value.messages)) target.append(guidedField(value, "messages", schemaSpec.properties.messages, path, {}, {required: true})); else { guidedNote(target, value.messages.length + " message definitions."); guidedMalformedItems(target, value.messages, nativeMessageSpec, path + "/messages", {}); } }}
+  ]));
+  guidedRepairProperties(node, value, schemaSpec, Object.keys(schemaSpec.properties), path, {});
+  return node;
+}
+function guidedMessage(value, path) {
+  const node = el("div"), context = {message: value};
+  node.append(guidedStepper(path, [
+    {title: "Identity", render: target => { guidedFields(target, value, nativeMessageSpec, ["message_number", "subtype"], path, context); guidedStandard(target, value, path, selectedDefinition()?.envelope || "C", true); }},
+    {title: "Packing", render: target => { guidedFields(target, value, nativeMessageSpec, ["octet_order"], path, context); guidedNote(target, "Use + Add field to message and the outline to define fields in wire order."); if (!Array.isArray(value.indexes)) target.append(guidedField(value, "indexes", nativeMessageSpec.properties.indexes, path, context, {required: true})); else guidedMalformedItems(target, value.indexes, indexSpec, path + "/indexes", context); }},
+    {title: "Repeats", render: target => guidedFields(target, value, nativeMessageSpec, ["repeats"], path, context)}
+  ]));
+  guidedRepairProperties(node, value, nativeMessageSpec, Object.keys(nativeMessageSpec.properties), path, context);
+  return node;
+}
+function guidedFixedBitWidth(target, value, indicator = false) {
+  guidedNote(target, "This field uses a fixed width of one bit.");
+  const valid = indicator ? !guidedOwn(value, "number_of_bits") || value.number_of_bits === 0 || value.number_of_bits === 1 : value.number_of_bits === 1;
+  if (!valid) {
+    const repair = el("div", "guided-repair"); repair.dataset.requiredInvalid = "true";
+    repair.append(el("code", "repair-value", "Saved width: " + (json(value.number_of_bits) ?? "missing")), button("Use one-bit width", () => schemaChange("repair one-bit width", () => { value.number_of_bits = 1; })));
+    target.append(repair);
+  }
+}
+function guidedIndex(value, path, context) {
+  const node = el("div"), role = value.indicator || "none", type = value.encode_type || "default";
+  context = {...context, field: value};
+  const stages = [{title: "Role & identity", render: target => {
+    target.append(guidedField(value, "indicator", indexSpec.properties.indicator, path, context, {required: true, controller: true, defaultValue: "none"}));
+    guidedFields(target, value, indexSpec, ["index_number", "key"], path, context);
+  }}];
+  if (role === "none") {
+    stages.push({title: "Encoding", render: target => {
+      target.append(guidedField(value, "encode_type", indexSpec.properties.encode_type, path, context, {required: true, controller: true, defaultValue: "default"}));
+      if (guidedScalarTypes.includes(type)) {
+        const values = type === "signed" ? ["twos_complement", "ones_complement", "sign_magnitude"] : type === "scaled" ? ["default", "unsigned", "twos_complement", "ones_complement", "sign_magnitude"] : ["default", "unsigned"];
+        target.append(guidedField(value, "representation", {kind: "enum", values}, path, context, {required: type === "signed", controller: true}));
+      }
+      if (type === "text" || type === "literal") target.append(guidedField(value, "text_encoding", type === "literal" ? enumeration("default", "ascii_7") : indexSpec.properties.text_encoding, path, context, {controller: true}));
+    }});
+    stages.push({title: "Size & length", render: target => {
+      if (["bits", "octets", "text"].includes(type)) target.append(guidedField(value, "length_from", text, path, context, {controller: true}));
+      if (type === "bool") guidedFixedBitWidth(target, value);
+      else target.append(guidedField(value, "number_of_bits", integer, path, context, {required: true}));
+      if (value.length_from !== undefined && type !== "literal") target.append(guidedField(value, "length_bias", integer, path, context));
+      if (type !== "bits") target.append(guidedField(value, "bit_order", order, path, context));
+      guidedNote(target, type === "literal" || value.length_from !== undefined ? "Capacity is finite; zero capacity is allowed. Lengths use wire code units." : "Set the fixed wire width. Octets and text must contain whole wire code units.");
+    }});
+    stages.push({title: "Constraints", render: target => {
+      if (guidedScalarTypes.includes(type)) guidedFields(target, value, indexSpec, ["allowed", "constant", ...(type === "scaled" ? ["scale"] : [])], path, context, type === "scaled" ? ["scale"] : []);
+      else guidedNote(target, "Raw scalar ranges, constants, and scale do not apply to this encoding.");
+    }});
+    stages.push({title: "Structure & condition", render: target => guidedFields(target, value, indexSpec, ["group_code", "repeat_code", "when"], path, context)});
+  } else {
+    stages.push({title: "Controller", render: target => {
+      guidedNote(target, "Indicators control structure rather than an ordinary mapped value.");
+      guidedFixedBitWidth(target, value, true);
+      if (role === "fpi" || role === "gpi") target.append(guidedField(value, "target", text, path, context, {required: true}));
+      else { target.append(guidedField(value, "repeat_code", text, path, context, {required: true})); guidedNote(target, "Declare a finite positive maximum on the controlled repeat, for example R1(4)."); }
+    }});
+    stages.push({title: "Membership", render: target => guidedFields(target, value, indexSpec, role === "fpi" || role === "gpi" ? ["group_code", "repeat_code"] : ["group_code"], path, context)});
+  }
+  node.append(guidedStepper(path, stages));
+  guidedRepairProperties(node, value, indexSpec, guidedIndexKeys(value), path, context);
+  return node;
+}
+function guidedRepeat(value, path, context) {
+  const node = el("div"), fixed = guidedOwn(value, "count") || !guidedOwn(value, "count_from");
+  node.append(guidedStepper(path, [
+    {title: "Count mechanism", render: target => {
+      target.append(guidedField(value, "repeat_code", text, path, context, {required: true}));
+      const select = el("select"); select.setAttribute("aria-label", "Repeat count mechanism"); select.add(new Option("Fixed count", "fixed")); select.add(new Option("Preceding scalar", "scalar")); select.value = fixed ? "fixed" : "scalar";
+      select.addEventListener("change", () => guidedController("change repeat count mechanism", removed => {
+        if (select.value === "fixed") { guidedRemove(value, ["count_from", "maximum", "minimum", "bias"], removed); value.count = 0; }
+        else { guidedRemove(value, ["count"], removed); value.count_from = ""; value.maximum = 0; }
+      })); target.append(el("label", "property-label", "Count mechanism"), select);
+    }},
+    {title: fixed ? "Fixed count" : "Source & bounds", render: target => guidedFields(target, value, repeatSpec, fixed ? ["count"] : ["count_from", "maximum", "minimum", "bias"], path, context, fixed ? ["count"] : ["count_from", "maximum"])}
+  ]));
+  guidedRepairProperties(node, value, repeatSpec, fixed ? ["repeat_code", "count"] : ["repeat_code", "count_from", "maximum", "minimum", "bias"], path, context);
+  return node;
+}
+function guidedCondition(value, path, context) {
+  const node = el("div");
+  node.append(guidedStepper(path, [
+    {title: "Match mode", render: target => guidedFields(target, value, conditionSpec, ["mode", "negate"], path, context)},
+    {title: "Terms", render: target => {
+      guidedNote(target, "Terms compare raw codes from preceding scalar fields. At least one term and one range per term are required. Native validation checks scope and ordering.");
+      target.append(guidedConditionTerms(value, path, context));
+    }}
+  ]));
+  guidedRepairProperties(node, value, conditionSpec, Object.keys(conditionSpec.properties), path, context);
+  return node;
+}
+function guidedConditionTerms(value, path, context) {
+  if (!Array.isArray(value.terms)) return guidedRepairValue(value.terms, conditionSpec.properties.terms, next => { value.terms = next; }, path + "/terms", context);
+  const node = el("div", "guided-array"), spec = conditionSpec.properties.terms.item;
+  value.terms.forEach((term, index) => {
+    const row = el("section", "array-item"), termPath = path + "/terms/" + index;
+    row.append(el("h4", "", "Term " + (index + 1)), button("Delete term", () => schemaChange("delete condition term", () => value.terms.splice(index, 1)), "text-button danger"));
+    if (!isObject(term)) row.append(guidedRepairValue(term, spec, next => { value.terms[index] = next; }, termPath, context));
+    else {
+      row.append(guidedStepper(termPath, [
+        {title: "Source", render: target => { target.append(guidedField(term, "field", text, termPath, context, {required: true})); guidedNote(target, "Enter the index of a preceding scalar, such as 1. Native validation checks that it is available in this scope."); }},
+        {title: "Raw values", render: target => guidedFields(target, term, spec, ["values"], termPath, context)},
+        {title: "Mask & negation", render: target => guidedFields(target, term, spec, ["mask", "negate"], termPath, context)}
+      ]));
+      guidedRepairProperties(row, term, spec, Object.keys(spec.properties), termPath, context);
+    }
+    node.append(row);
+  });
+  node.append(button("+ Add term", () => schemaChange("add condition term", () => value.terms.push({field: "", values: []}))));
+  return node;
+}
 function renderSchemaEditor() {
   const target = $("schema-editor"), definition = selectedDefinition(); target.replaceChildren();
-  if (!definition) { $("schema-inspector-title").textContent = "Select a definition"; target.append(el("p", "empty-hint", "Choose a schema, message, or field. Every native property is available as a structured control.")); return; }
-  let current = definition, spec = schemaSpec, title = "Schema properties";
+  const undo = button("Undo", undoSchemaChange, "button small schema-undo"); undo.id = "schema-undo"; target.append(undo); updateSchemaUndo();
+  if (schemaExplanation) target.append(el("p", "guided-explanation", schemaExplanation));
+  if (!definition) { $("schema-inspector-title").textContent = "Select a definition"; guidedNote(target, "Choose or create a schema. Undo restores schema edits from this editing session."); return; }
+  let current = definition, spec = schemaSpec, title = "Schema properties", context = {};
   if (selectedMessage !== null) {
     current = definition.messages?.[selectedMessage]; spec = nativeMessageSpec; title = "Message properties";
     if (!current) { selectedMessage = selectedIndex = null; return renderSchemaEditor(); }
-    if (selectedIndex !== null) { current = current.indexes?.[selectedIndex]; spec = indexSpec; title = "Field properties"; }
+    context.message = current;
+    if (selectedIndex !== null) { current = current.indexes?.[selectedIndex]; spec = indexSpec; title = "Field properties"; context.field = current; }
   }
   if (!current) { selectedIndex = null; return renderSchemaEditor(); }
   $("schema-inspector-title").textContent = title;
@@ -465,15 +923,58 @@ function renderSchemaEditor() {
     else if (selectedIndex === null) definition.messages[selectedMessage] = next;
     else definition.messages[selectedMessage].indexes[selectedIndex] = next;
   };
-  target.append(editor(current, spec, setCurrent, "", "schema/" + selectedSchema + "/" + selectedMessage + "/" + selectedIndex));
+  target.append(guidedValue(current, spec, setCurrent, "schema/" + selectedSchema + "/" + selectedMessage + "/" + selectedIndex, context));
   if (selectedMessage !== null) {
     const actions = el("div", "button-row");
     if (selectedIndex !== null) {
-      actions.append(button("Move field up", () => { if (selectedIndex) { const fields = definition.messages[selectedMessage].indexes; [fields[selectedIndex - 1], fields[selectedIndex]] = [fields[selectedIndex], fields[selectedIndex - 1]]; selectedIndex--; changed(); renderSchemas(); renderSchemaEditor(); } }), button("Delete field", () => { definition.messages[selectedMessage].indexes.splice(selectedIndex, 1); selectedIndex = null; changed(); renderSchemas(); renderSchemaEditor(); }, "text-button danger"));
-    } else actions.append(button("Delete message", () => { definition.messages.splice(selectedMessage, 1); selectedMessage = selectedIndex = null; changed(); renderSchemas(); renderSchemaEditor(); }, "text-button danger"));
+      const up = button("Move field up", () => { if (selectedIndex) schemaChange("move field", () => { const fields = definition.messages[selectedMessage].indexes; [fields[selectedIndex - 1], fields[selectedIndex]] = [fields[selectedIndex], fields[selectedIndex - 1]]; selectedIndex--; }); }); up.disabled = selectedIndex === 0;
+      actions.append(up, button("Delete field", () => schemaChange("delete field", () => { definition.messages[selectedMessage].indexes.splice(selectedIndex, 1); selectedIndex = null; }), "text-button danger"));
+    } else actions.append(button("Delete message", () => schemaChange("delete message", () => { definition.messages.splice(selectedMessage, 1); selectedMessage = selectedIndex = null; }), "text-button danger"));
     target.append(el("hr", "section-divider"), actions);
   }
 }
+function guidedAddSchema() {
+  schemaChange("new schema (also removes its outputs)", () => {
+    const schema = {id: uid("schema"), document: {format: "vmf-schema/1", envelope: "C", messages: []}};
+    workspace.schemas.push(schema); selectedSchema = schema.id; selectedMessage = selectedIndex = null; schemaExplanation = "";
+  });
+}
+function guidedAddMessage() {
+  const definition = selectedDefinition(); if (!definition) return;
+  if (!Array.isArray(definition.messages)) { message("Repair the messages array before adding a message.", true); return; }
+  schemaChange("new message", () => { definition.messages.push({message_number: "", indexes: []}); selectedMessage = definition.messages.length - 1; selectedIndex = null; schemaExplanation = ""; });
+}
+function guidedAddIndex() {
+  const msg = selectedDefinition()?.messages?.[selectedMessage]; if (!msg) return;
+  if (!Array.isArray(msg.indexes)) { message("Repair the indexes array before adding a field.", true); return; }
+  schemaChange("new field", () => {
+    const used = new Set(msg.indexes.filter(isObject).map(field => String(field.index_number).replace(/\.$/, "")));
+    let number = 1; while (used.has(String(number))) number++;
+    msg.indexes.push({index_number: number + ".", number_of_bits: 1}); selectedIndex = msg.indexes.length - 1; schemaExplanation = "";
+  });
+}
+async function guidedImportSchema(event) {
+  const file = event.target.files[0]; if (!file) return;
+  try {
+    if (file.size > 16 * 1024 * 1024) throw new Error("Schema exceeds 16 MiB.");
+    const document = parseJSON(await file.text());
+    if (document.format !== "vmf-schema/1" || !Array.isArray(document.messages)) throw new Error("Choose a native vmf-schema/1 definition.");
+    let id = file.name.replace(/\.json$/i, "") || uid("schema");
+    while (schemaById(id)) id = uid(id);
+    schemaChange("import schema (also removes its outputs)", () => { workspace.schemas.push({id, document}); selectedSchema = id; selectedMessage = selectedIndex = null; schemaExplanation = ""; });
+    message("Schema imported. Native validation runs when the draft is saved.");
+  } catch (error) { message(error.message, true); }
+  event.target.value = "";
+}
+function guidedDeleteSchema() {
+  if (!selectedSchema) return;
+  schemaChange("delete schema and its outputs", () => {
+    workspace.outputs = workspace.outputs.filter(item => item.mapping?.schema !== selectedSchema);
+    workspace.schemas = workspace.schemas.filter(item => item.id !== selectedSchema);
+    selectedSchema = selectedMessage = selectedIndex = selectedWire = selectedOutput = null;
+  });
+}
+
 function canonical(value) {
   if (!value || typeof value !== "object") return json(value);
   if (Array.isArray(value)) return "[" + value.map(canonical).join(",") + "]";
@@ -936,41 +1437,15 @@ document.addEventListener("keydown", event => {
       || event.target.closest("input, textarea, select, [contenteditable]:not([contenteditable='false'])")) return;
   if (removeSelectedConnection()) event.preventDefault();
 });
-$("add-schema").addEventListener("click", () => {
-  const schema = {id: uid("schema"), document: {format: "vmf-schema/1", envelope: "C", messages: []}};
-  workspace.schemas.push(schema); selectedSchema = schema.id; selectedMessage = selectedIndex = null; changed(); render();
-});
-$("add-message").addEventListener("click", () => {
-  const definition = selectedDefinition(); if (!definition) return;
-  (definition.messages ||= []).push({message_number: "", indexes: []}); selectedMessage = definition.messages.length - 1; selectedIndex = null; changed(); renderSchemas(); renderSchemaEditor();
-});
-$("add-index").addEventListener("click", () => {
-  const msg = selectedDefinition()?.messages?.[selectedMessage]; if (!msg) return;
-  (msg.indexes ||= []).push({index_number: String(msg.indexes.length + 1) + ".", number_of_bits: 1}); selectedIndex = msg.indexes.length - 1; changed(); renderSchemas(); renderSchemaEditor();
-});
-$("import-schema").addEventListener("change", async event => {
-  const file = event.target.files[0]; if (!file) return;
-  try {
-    if (file.size > 16 * 1024 * 1024) throw new Error("Schema exceeds 16 MiB.");
-    const document = parseJSON(await file.text());
-    if (document.format !== "vmf-schema/1" || !Array.isArray(document.messages)) throw new Error("Choose a native vmf-schema/1 definition.");
-    let id = file.name.replace(/\.json$/i, ""); if (!id) id = uid("schema");
-    if (schemaById(id)) id += "-" + Date.now();
-    workspace.schemas.push({id, document}); selectedSchema = id; selectedMessage = selectedIndex = null; changed(); render(); message("Schema imported. Native validation runs when the draft is saved.");
-  } catch (error) { message(error.message, true); }
-  event.target.value = "";
-});
+$("add-schema").addEventListener("click", guidedAddSchema);
+$("add-message").addEventListener("click", guidedAddMessage);
+$("add-index").addEventListener("click", guidedAddIndex);
+$("import-schema").addEventListener("change", guidedImportSchema);
 $("export-schema").addEventListener("click", () => { const schema = schemaById(selectedSchema); if (schema) download(schema.id + ".json", schema.document); });
-$("delete-schema").addEventListener("click", () => {
-  if (!selectedSchema) return;
-  workspace.outputs = workspace.outputs.filter(item => item.mapping?.schema !== selectedSchema);
-  workspace.schemas = workspace.schemas.filter(item => item.id !== selectedSchema);
-  selectedSchema = selectedMessage = selectedIndex = selectedWire = selectedOutput = null;
-  changed(); render();
-});
+$("delete-schema").addEventListener("click", guidedDeleteSchema);
 $("reload").addEventListener("click", async () => {
   if (saving) return;
-  try { clearTimeout(saveTimer); state = await request("/api/state"); workspace = state.draft; generation = savedGeneration = 0; selectedWire = selectedOutput = null; message(""); status(); render(); } catch (error) { message(error.message, true); }
+  try { clearTimeout(saveTimer); state = await request("/api/state"); workspace = state.draft; resetSchemaHistory(); generation = savedGeneration = 0; selectedWire = selectedOutput = null; message(""); status(); render(); } catch (error) { message(error.message, true); }
 });
 document.querySelector(".mapping-toolbar strong").after(helpButton(
   "Translation map",

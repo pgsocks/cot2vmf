@@ -762,6 +762,53 @@ def editing(binary, root):
     assert refused.returncode == 2, "corrupt active state fell back to draft"
 
 
+def schema_restoration(binary, root):
+    service = Service(binary, root, web=True)
+    try:
+        initial = service.request("POST", "/api/state", {
+            "revision": service.state()["draft_revision"],
+            "workspace": fixture()})
+        original = service.packets()
+        snapshot = copy.deepcopy(initial["draft"]["schemas"])
+        draft = copy.deepcopy(initial["draft"])
+        field = draft["schemas"][0]["document"]["messages"][0]["indexes"][0]
+        field["encode_type"] = "signed"
+        del field["representation"]
+        del field["scale"]
+        invalid = service.request("POST", "/api/state", {
+            "revision": initial["draft_revision"], "workspace": draft})
+        assert not invalid["valid"]
+        assert service.packets() == original
+        draft["outputs"][0]["mapping"]["fields"][0]["factor"] = 2
+        edited = service.request("POST", "/api/state", {
+            "revision": invalid["draft_revision"], "workspace": draft})
+        assert not edited["valid"]
+        draft["schemas"] = snapshot
+        restored = service.request("POST", "/api/state", {
+            "revision": edited["draft_revision"], "workspace": draft})
+        assert restored["valid"], restored
+        changed = service.packets()
+        assert changed[0] != original[0] and changed[1] == original[1]
+        removed = copy.deepcopy(draft)
+        removed["schemas"] = []
+        removed["outputs"] = []
+        deleted = service.request("POST", "/api/state", {
+            "revision": restored["draft_revision"], "workspace": removed})
+        assert deleted["valid"]
+        restored = service.request("POST", "/api/state", {
+            "revision": deleted["draft_revision"], "workspace": draft})
+        assert restored["valid"]
+        assert service.packets() == changed
+    finally:
+        service.close()
+    service = Service(binary, root, web=True)
+    try:
+        assert service.state()["draft"] == draft
+        assert service.packets() == changed
+    finally:
+        service.close()
+
+
 def feedback_fixture():
     document = fixture()
     definition = document["schemas"][0]["document"]
@@ -1239,5 +1286,6 @@ if __name__ == "__main__":
          "editing": editing, "publication": publication,
          "persistence-size": persistence_size,
          "revisions": revisions, "authorities": authorities,
-         "large-lookup": large_lookup, "feedback": feedback}[
+         "large-lookup": large_lookup, "feedback": feedback,
+         "schema-restoration": schema_restoration}[
              sys.argv[2]](os.path.abspath(sys.argv[1]), root)

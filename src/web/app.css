@@ -1179,3 +1179,20 @@ footer {
   overflow-wrap: anywhere;
 }
 .help-tooltip[hidden] { display: none; }
+
+.schema-undo { width: 100%; margin-bottom: 14px; text-align: left; }
+.guided-steps { display: flex; flex-wrap: wrap; gap: 6px; margin: 14px 0; }
+.guided-step { border: 1px solid var(--line, #34404b); border-radius: 6px; background: transparent; color: inherit; padding: 7px 9px; font: inherit; text-align: left; cursor: pointer; }
+.guided-step.selected { border-color: var(--orange, #edab71); background: #edab711a; }
+.guided-step:disabled { opacity: .5; cursor: default; }
+.guided-navigation { padding-top: 14px; border-top: 1px solid var(--line, #34404b); margin-top: 14px; }
+.guided-step-body > .property:first-child { margin-top: 0; }
+.guided-array .array-actions { flex-wrap: wrap; gap: 5px; }
+.guided-array .array-actions button { font-size: 11px; }
+.guided-explanation { padding: 10px; background: #edab7114; border-left: 2px solid var(--orange, #edab71); font-size: 12px; line-height: 1.5; }
+.guided-repair { margin: 12px 0; padding: 10px; border: 1px solid #c58b62; border-radius: 6px; }
+.guided-repair > summary { cursor: pointer; }
+.repair-value { display: block; white-space: pre-wrap; overflow-wrap: anywhere; margin: 8px 0; font-size: 11px; }
+.guided-property .property-label label { text-transform: none; }
+.guided-property .remove-property { max-width: 55%; font-size: 10px; }
+.guided-form .guided-form { padding-left: 8px; border-left: 1px solid var(--line, #34404b); }

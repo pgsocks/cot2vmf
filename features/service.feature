@@ -54,3 +54,8 @@ Feature: Continuous CoT translation through UDP
   Scenario: Refine a selected subset using stimulated output feedback
     When the "feedback" service workflow is exercised
     Then all service assertions succeed
+
+  @web
+  Scenario: Restore payload schemas while preserving intervening mapping edits
+    When the "schema-restoration" service workflow is exercised
+    Then all service assertions succeed
