@@ -896,3 +896,28 @@ test('an activation failure retains the new draft revision and pending input',
     expect(saved.active_revision).toBe(saved.draft_revision);
     await expect(page.locator('#toast')).not.toContainText('another window');
   });
+
+test('question-mark help supports hover, focus, click and Escape', async ({ page }) => {
+  await page.goto('/');
+  const help = page.getByRole('button', { name: 'Help for Translation map', exact: true });
+  const tooltip = page.getByRole('tooltip');
+  await help.hover();
+  await expect(tooltip).toBeVisible();
+  await expect(help).toHaveAttribute('aria-describedby', 'context-help-tooltip');
+  const box = await tooltip.boundingBox();
+  expect(box.x).toBeGreaterThanOrEqual(0);
+  expect(box.y).toBeGreaterThanOrEqual(0);
+  await page.keyboard.press('Escape');
+  await expect(tooltip).toBeHidden();
+  await expect(help).not.toHaveAttribute('aria-describedby');
+  await page.mouse.move(0, 0);
+  await help.focus();
+  await expect(tooltip).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(help).toBeFocused();
+  await expect(tooltip).toBeHidden();
+  await help.click();
+  await expect(tooltip).toBeVisible();
+  await help.click();
+  await expect(tooltip).toBeHidden();
+});

@@ -69,6 +69,144 @@ const $ = id => document.getElementById(id);
 function el(tag, className = "", text = "") { const node = document.createElement(tag); node.className = className; node.textContent = text; return node; }
 function button(text, action, className = "button small") { const node = el("button", className, text); node.type = "button"; node.addEventListener("click", action); return node; }
 function message(text, error = false) { $("toast").hidden = !text; $("toast").textContent = text; $("toast").classList.toggle("error", error); }
+// Contextual help lives outside scrolling panels and never starts a mapping.
+let openHelp = null;
+let helpTooltip = null;
+let helpHideTimer;
+let helpTooltipHovered = false;
+const dismissedHelp = new WeakSet();
+
+function dismissHelp(dismissed = false) {
+  clearTimeout(helpHideTimer);
+  if (!openHelp) return;
+  const trigger = openHelp.trigger;
+  if (dismissed) dismissedHelp.add(trigger);
+  const descriptions = (trigger.getAttribute("aria-describedby") || "")
+    .split(/\s+/).filter(id => id && id !== helpTooltip.id);
+  if (descriptions.length) trigger.setAttribute("aria-describedby", descriptions.join(" "));
+  else trigger.removeAttribute("aria-describedby");
+  helpTooltip.hidden = true;
+  helpTooltipHovered = false;
+  openHelp = null;
+}
+
+function positionHelp() {
+  if (!openHelp) return;
+  const trigger = openHelp.trigger;
+  if (!trigger.isConnected || trigger.closest("[hidden]")) { dismissHelp(); return; }
+  const anchor = trigger.getBoundingClientRect();
+  const width = document.documentElement.clientWidth;
+  const height = document.documentElement.clientHeight;
+  if (!anchor.width || !anchor.height || anchor.bottom < 0 || anchor.top > height) {
+    dismissHelp(); return;
+  }
+  for (let parent = trigger.parentElement; parent; parent = parent.parentElement) {
+    const style = getComputedStyle(parent);
+    if (!/(auto|scroll|hidden|clip)/.test(style.overflow + style.overflowY + style.overflowX)) continue;
+    const bounds = parent.getBoundingClientRect();
+    if (anchor.bottom <= bounds.top || anchor.top >= bounds.bottom
+        || anchor.right <= bounds.left || anchor.left >= bounds.right) {
+      dismissHelp(); return;
+    }
+  }
+  helpTooltip.style.left = "8px";
+  helpTooltip.style.top = "8px";
+  const box = helpTooltip.getBoundingClientRect();
+  const left = Math.max(8, Math.min(anchor.left, width - box.width - 8));
+  let top = anchor.bottom + 8;
+  if (top + box.height > height - 8) top = anchor.top - box.height - 8;
+  helpTooltip.style.left = left + "px";
+  helpTooltip.style.top = Math.max(8, Math.min(top, height - box.height - 8)) + "px";
+}
+
+function scheduleHelpDismiss() {
+  clearTimeout(helpHideTimer);
+  helpHideTimer = setTimeout(() => {
+    if (openHelp && !openHelp.pinned && !helpTooltipHovered
+        && document.activeElement !== openHelp.trigger) dismissHelp();
+  }, 120);
+}
+
+function ensureHelpTooltip() {
+  if (helpTooltip) return;
+  helpTooltip = document.createElement("div");
+  helpTooltip.id = "context-help-tooltip";
+  helpTooltip.className = "help-tooltip";
+  helpTooltip.setAttribute("role", "tooltip");
+  helpTooltip.hidden = true;
+  document.body.append(helpTooltip);
+  helpTooltip.addEventListener("pointerenter", () => {
+    helpTooltipHovered = true; clearTimeout(helpHideTimer);
+  });
+  helpTooltip.addEventListener("pointerleave", () => {
+    helpTooltipHovered = false; scheduleHelpDismiss();
+  });
+  for (const type of ["pointerdown", "click"])
+    helpTooltip.addEventListener(type, event => event.stopPropagation());
+  document.addEventListener("keydown", event => {
+    if (event.key === "Escape") dismissHelp(true);
+  });
+  document.addEventListener("pointerdown", event => {
+    if (openHelp && !openHelp.trigger.contains(event.target)
+        && !helpTooltip.contains(event.target)) dismissHelp();
+  }, true);
+  document.addEventListener("scroll", positionHelp, true);
+  window.addEventListener("resize", positionHelp);
+  new MutationObserver(() => {
+    if (openHelp && (!openHelp.trigger.isConnected
+        || openHelp.trigger.closest("[hidden]"))) dismissHelp();
+  }).observe(document.body, {childList: true, subtree: true,
+    attributes: true, attributeFilter: ["hidden"]});
+}
+
+function showHelp(trigger, description, pinned = false) {
+  ensureHelpTooltip();
+  clearTimeout(helpHideTimer);
+  if (openHelp?.trigger !== trigger) dismissHelp();
+  openHelp = {trigger, pinned};
+  helpTooltip.textContent = description;
+  helpTooltip.hidden = false;
+  const descriptions = new Set((trigger.getAttribute("aria-describedby") || "")
+    .split(/\s+/).filter(Boolean));
+  descriptions.add(helpTooltip.id);
+  trigger.setAttribute("aria-describedby", [...descriptions].join(" "));
+  positionHelp();
+}
+
+function helpButton(label, description) {
+  ensureHelpTooltip();
+  const trigger = document.createElement("button");
+  trigger.type = "button";
+  trigger.className = "help-button";
+  trigger.textContent = "?";
+  trigger.setAttribute("aria-label", "Help for " + label);
+  const reveal = () => {
+    dismissedHelp.delete(trigger);
+    showHelp(trigger, description, openHelp?.trigger === trigger && openHelp.pinned);
+  };
+  trigger.addEventListener("pointerenter", reveal);
+  trigger.addEventListener("focus", () => {
+    if (!dismissedHelp.has(trigger)) reveal();
+  });
+  trigger.addEventListener("pointerleave", () => {
+    dismissedHelp.delete(trigger);
+    scheduleHelpDismiss();
+  });
+  trigger.addEventListener("blur", () => {
+    dismissedHelp.delete(trigger);
+    if (openHelp?.trigger === trigger) openHelp.pinned = false;
+    scheduleHelpDismiss();
+  });
+  for (const type of ["pointerdown"])
+    trigger.addEventListener(type, event => event.stopPropagation());
+  trigger.addEventListener("click", event => {
+    event.preventDefault(); event.stopPropagation();
+    if (openHelp?.trigger === trigger && openHelp.pinned) dismissHelp(true);
+    else { dismissedHelp.delete(trigger); showHelp(trigger, description, true); }
+  });
+  return trigger;
+}
+
 const text = {kind: "text"}, integer = {kind: "integer"}, number = {kind: "number"}, boolean = {kind: "boolean"}, scalar = {kind: "scalar"};
 const enumeration = (...values) => ({kind: "enum", values});
 const object = (properties, required = []) => ({kind: "object", properties, required});
@@ -834,6 +972,10 @@ $("reload").addEventListener("click", async () => {
   if (saving) return;
   try { clearTimeout(saveTimer); state = await request("/api/state"); workspace = state.draft; generation = savedGeneration = 0; selectedWire = selectedOutput = null; message(""); status(); render(); } catch (error) { message(error.message, true); }
 });
+document.querySelector(".mapping-toolbar strong").after(helpButton(
+  "Translation map",
+  "Drag a CoT source to a VMF target, or click a source and then a target. The dashed wire follows your pointer while a connection is pending. Escape cancels pending connections and clears wire selection. Select a wire to edit its conversion or press Delete to remove it."
+));
 (async () => {
   try {
     state = await request("/api/state"); workspace = state.draft; status(); render();

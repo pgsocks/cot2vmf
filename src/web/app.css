@@ -1131,3 +1131,51 @@ footer {
   scrollbar-color: #35465b transparent;
   padding: 0 2px 8px;
 }
+
+.help-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  margin: 0 0 0 6px;
+  border: 1px solid #637c91;
+  border-radius: 50%;
+  color: #c2d2df;
+  background: #17212e;
+  font: 600 12px/1 ui-sans-serif, system-ui, sans-serif;
+  cursor: help;
+  vertical-align: middle;
+}
+.help-button:hover,.help-button:focus-visible {
+  color: #f0fffd;
+  border-color: var(--teal);
+  background: #1b3036;
+}
+.help-button:focus-visible {
+  outline: 2px solid var(--teal);
+  outline-offset: 3px;
+}
+.help-tooltip {
+  position: fixed;
+  z-index: 1000;
+  box-sizing: border-box;
+  width: max-content;
+  max-width: min(340px,calc(100vw - 16px));
+  max-height: calc(100vh - 16px);
+  overflow: auto;
+  padding: 11px 13px;
+  border: 1px solid #637c91;
+  border-radius: 6px;
+  background: #101b28;
+  box-shadow: 0 8px 26px #0008;
+  color: #e1eaf1;
+  font: 12px/1.5 ui-sans-serif, system-ui, sans-serif;
+  text-align: left;
+  letter-spacing: normal;
+  text-transform: none;
+  overflow-wrap: anywhere;
+}
+.help-tooltip[hidden] { display: none; }
