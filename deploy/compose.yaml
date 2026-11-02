@@ -17,5 +17,29 @@ services:
     security_opt: [no-new-privileges:true]
     restart: unless-stopped
     stop_grace_period: 5s
+  gateway:
+    image: tak-gateway:local
+    build:
+      context: https://github.com/pgsocks/tak-gateway.git#534e225587a3e91289303160e2c209bd68da03b3
+      dockerfile: docker/Dockerfile
+      target: runtime
+    environment:
+      TAK_GATEWAY_OUTPUTS: translator=udp://translator:9001
+      TAK_GATEWAY_WEB_BIND: 0.0.0.0:8081
+      TAK_GATEWAY_STATUS_FILE: /run/tak-gateway/status.json
+      TMPDIR: /run/tak-gateway
+    ports:
+      - "${WEB_BIND:-127.0.0.1}:8081:8081"
+    volumes:
+      - gateway-state:/var/lib/tak-gateway
+    read_only: true
+    tmpfs:
+      - /run/tak-gateway:mode=0700,uid=1000,gid=1000
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+    stop_grace_period: 5s
+    depends_on: [translator]
 volumes:
   workspace:
+  gateway-state:

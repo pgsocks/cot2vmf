@@ -64,13 +64,20 @@ artifacts without test tooling.
 docker compose -f deploy/compose.yaml up --build -d
 ```
 
-The Compose example persists the workspace and publishes UDP 9001 and the
-browser on host loopback. The image starts with the GUI and JSON logging;
-`run --no-web` disables the GUI. Optional environment inputs seed schemas and
-mappings once, preserving subsequent edits. See [deployment](docs/deployment.md)
-for runtime settings, seed inputs, persistent storage, and offline commands.
+Compose starts the translator and TAK Gateway, building Gateway from a pinned
+remote Git revision. The first build needs Git network access. Open:
 
-Stop with `docker compose -f deploy/compose.yaml down`.
+- `http://127.0.0.1:8080` to author translator schemas and mappings.
+- `http://127.0.0.1:8081` to add existing TAK connections in Gateway.
+
+Gateway starts without inputs and forwards received XML events over UDP to
+`translator:9001`. Both GUIs and the translator's published UDP port bind to
+host loopback by default. Saved mappings, Gateway settings, and uploaded
+credentials survive restart. See [deployment](docs/deployment.md) for network
+settings, seed inputs, persistent storage, and offline commands.
+
+Stop with `docker compose -f deploy/compose.yaml down`; both named volumes are
+retained.
 
 ## Verification and contracts
 

@@ -64,21 +64,42 @@ never connects to TAK Server itself.
 sources; the runtime contains the executable and its runtime libraries, without
 build credentials, source caches, operational schemas, or browser test tools.
 Docker Engine with Buildx and Compose v2 is needed for the supplied builds.
+Compose also builds TAK Gateway from its remote Git repository at
+[`534e225587a3e91289303160e2c209bd68da03b3`](https://github.com/pgsocks/tak-gateway/tree/534e225587a3e91289303160e2c209bd68da03b3),
+using upstream `docker/Dockerfile` and its `runtime` target. The first build
+needs Git network access as well as access to the dependency sources.
 
 ```sh
 docker compose -f deploy/compose.yaml up --build -d
-docker compose -f deploy/compose.yaml logs -f translator
+docker compose -f deploy/compose.yaml logs -f translator gateway
 ```
 
-The example publishes UDP 9001 and HTTP 8080 on host loopback and retains state
-in a named volume. Set `COT_BIND` to a reachable host address for Gateway
-access from another host, `WEB_BIND` to choose the published browser address,
-and `VMF_TARGET` to the receiver's address and port. The VMF destination must
-resolve from inside the translator container; its loopback refers to that
-container.
+Open `http://127.0.0.1:8080` for translator schemas and mappings, and
+`http://127.0.0.1:8081` to configure existing TAK connections in Gateway.
+Gateway starts without inputs; add them manually or upload an ATAK package
+through its GUI. Its initial UDP output is
+`translator=udp://translator:9001`, delivering one unframed XML event per
+datagram over the Compose network. No TAK Server is bundled.
 
-The entrypoint starts UDP reception on `0.0.0.0:9001`, sends configured outputs
-to `127.0.0.1:9002`, enables the GUI on `0.0.0.0:8080`, and uses JSON logging.
+Both GUIs publish on host loopback. `WEB_BIND` selects the published host
+address for both; `COT_BIND` selects the translator's published UDP 9001 address
+for external senders. `VMF_TARGET` selects the receiving process's address and
+port. The VMF destination must resolve from inside the translator container;
+its loopback refers to that container. Gateway listens on container port 8081
+and publishes host port 8081 so its HTTP Host validation accepts browser
+requests. Access its GUI by numeric IP or `localhost`.
+
+The `workspace` volume preserves translator drafts and active mappings. The
+separate `gateway-state` volume preserves Gateway settings and uploaded
+credentials, inheriting the upstream image's uid/gid 1000 ownership when first
+created. Gateway uses private `/run/tak-gateway` tmpfs for temporary imports
+and status. Its environment values seed the initial store only; subsequent
+starts retain GUI edits instead of applying those seed settings again.
+`docker compose -f deploy/compose.yaml down` retains both named volumes.
+
+The translator entrypoint starts UDP reception on `0.0.0.0:9001`, sends
+configured outputs to `127.0.0.1:9002`, enables the GUI on `0.0.0.0:8080`, and
+uses JSON logging.
 Without schemas or mappings it remains receive-only. Explicit run arguments
 override these environment settings:
 
@@ -126,9 +147,10 @@ malformed input, I/O errors, and corrupt saved state stop startup. Administrativ
 commands and help bypass seeding. To change saved configuration from the CLI,
 stop the service and invoke `config` against its mounted workspace.
 
-Mount a writable workspace for persistent edits. The image runs as uid/gid
-10001; bind mounts must permit that identity to write. The provided named
-volume starts with the image's ownership. Runtime needs no network downloads.
+Mount a writable workspace for persistent edits. The translator image runs as
+uid/gid 10001; bind mounts must permit that identity to write. The provided
+named volume starts with the image's ownership. Runtime needs no network
+downloads.
 
 Private state files are `active.json`, `draft.json`, and the workspace lock.
 Keep the workspace on a filesystem supporting same-directory atomic rename.
