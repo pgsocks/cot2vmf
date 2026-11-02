@@ -1206,3 +1206,26 @@ test('field and message deletion undo restores native definitions',
     await page.locator('#schema-undo').click(); await saved(page);
     expect((await state(request)).draft.schemas[0].document).toEqual(schema);
   });
+
+test('CoT purpose help covers every source without arming connections', async ({ page }) => {
+  await page.goto('/');
+  const sources = page.locator('#source-fields .source-port');
+  await expect(sources).toHaveCount(32);
+  await expect(page.locator('#source-fields .help-button')).toHaveCount(32);
+  const tooltip = page.getByRole('tooltip');
+  const latitude = page.getByRole('button', { name: 'Help for point.latitude', exact: true });
+  await latitude.click();
+  await expect(tooltip).toContainText('WGS84');
+  await expect(page.locator('.source-port.armed')).toHaveCount(0);
+  await expect(page.locator('.drag-wire')).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  const residual = page.getByRole('button', { name: 'Help for detail.xml', exact: true });
+  await residual.click();
+  await expect(tooltip).toContainText('cannot be connected directly');
+  await page.locator('#source-search').fill('point.latitude');
+  await expect(tooltip).toBeHidden();
+  await expect(page.locator('[aria-describedby="context-help-tooltip"]')).toHaveCount(0);
+  await expect(page.locator('#source-fields .help-button')).toHaveCount(1);
+  await page.locator('.source-port[data-source-path="point.latitude"]').hover();
+  await expect(tooltip).toBeHidden();
+});

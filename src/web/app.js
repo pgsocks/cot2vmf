@@ -207,6 +207,41 @@ function helpButton(label, description) {
   return trigger;
 }
 
+const cotFieldHelp = {
+  type: "The CoT type code describes the kind of object or event, including its affiliation when represented by the code.",
+  access: "The event's optional access-control label. Empty access and the CoT value Undefined are treated as unavailable.",
+  qos: "The event's optional quality-of-service code. Its original text is available for a value-table mapping when present.",
+  opex: "The event's optional operation or exercise code. Its original text is available for a value-table mapping when present.",
+  uid: "The unique identifier of the object or event represented by this CoT message.",
+  send_time_ms: "The event's send time, represented as UTC milliseconds since the Unix epoch. This is the XML time attribute.",
+  start_time_ms: "The start of the event's validity interval, represented as UTC milliseconds since the Unix epoch. This is the XML start attribute.",
+  stale_time_ms: "The time after which the event is stale, represented as UTC milliseconds since the Unix epoch. This is the XML stale attribute.",
+  how: "The CoT code describing how the event information was obtained or determined.",
+  "point.latitude": "The object's latitude in WGS84 degrees, positive north and negative south.",
+  "point.longitude": "The object's longitude in WGS84 degrees, positive east and negative west.",
+  "point.hae": "The object's height above the WGS84 ellipsoid in metres. The native CoT unknown-height value is 999999 metres.",
+  "point.ce": "Circular horizontal position error in metres. The native CoT unknown-error value is 999999 metres.",
+  "point.le": "Linear vertical position error in metres. The native CoT unknown-error value is 999999 metres.",
+  caveat: "The event's optional caveat marking, preserved as text for any explicit mapping you define.",
+  releasable_to: "The event's optional releasability marking. This is the XML releasableTo attribute, preserved as text.",
+  "detail.contact.endpoint": "The contact's primary endpoint address, when supplied by the sender.",
+  "detail.contact.callsign": "The contact's human-readable callsign or display name.",
+  "detail.contact.altendpoints": "The contact's optional alternate endpoint addresses, preserved as one text value.",
+  "detail.group.name": "The contact's group or team name. This is the name attribute of the XML __group element.",
+  "detail.group.role": "The contact's role within its group or team. This is the role attribute of the XML __group element.",
+  "detail.precision_location.geopointsrc": "The sender's code for the source of the horizontal position, such as the positioning source used by the device.",
+  "detail.precision_location.altsrc": "The sender's code for the source of the altitude measurement.",
+  "detail.status.battery": "The device's reported battery percentage. The full native unsigned 32-bit value is preserved.",
+  "detail.takv.device": "The device name or model reported by the TAK client.",
+  "detail.takv.platform": "The TAK platform or client application name reported by the sender.",
+  "detail.takv.os": "The operating system reported by the TAK client.",
+  "detail.takv.version": "The application version reported by the TAK client.",
+  "detail.track.speed": "The object's reported speed in metres per second.",
+  "detail.track.course": "The object's reported course in degrees clockwise from true north.",
+  "detail.xml": "Residual XML detail content that is not represented by the standard typed fields. Its presence can be observed, but it cannot be connected directly to a VMF field.",
+  "detail.extensions": "Opaque registered extension entries retained by the native CoT decoder. Their presence can be observed, but they cannot be connected directly to a VMF field.",
+};
+
 const text = {kind: "text"}, integer = {kind: "integer"}, number = {kind: "number"}, boolean = {kind: "boolean"}, scalar = {kind: "scalar"};
 const enumeration = (...values) => ({kind: "enum", values});
 const object = (properties, required = []) => ({kind: "object", properties, required});
@@ -1223,7 +1258,10 @@ function renderMapping() {
       dragging = source.path; pointerPosition = {x: event.clientX, y: event.clientY};
       scheduleWires();
     });
-    sources.append(port);
+    const row = el("div", "source-field-row");
+    const help = helpButton(source.path, cotFieldHelp[source.path]);
+    help.dataset.sourceHelp = source.path;
+    row.append(port, help); sources.append(row);
   }
   if (!workspace.schemas.length) {
     const empty = el("div", "empty-hint"); empty.append(el("p", "", "Your VMF schema library is empty."), el("p", "", "CoT reception works without schemas. Add your payload definitions to start connecting fields."), button("Author a schema →", () => tab("schemas"), "button secondary")); targets.append(empty);

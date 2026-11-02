@@ -1196,3 +1196,15 @@ footer {
 .guided-property .property-label label { text-transform: none; }
 .guided-property .remove-property { max-width: 55%; font-size: 10px; }
 .guided-form .guided-form { padding-left: 8px; border-left: 1px solid var(--line, #34404b); }
+
+.source-field-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.source-field-row .source-port {
+  flex: 1;
+  min-width: 0;
+  width: auto;
+}
+.source-field-row .help-button { margin-left: 0; }
