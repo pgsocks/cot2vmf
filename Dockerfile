@@ -30,9 +30,11 @@ RUN --mount=type=secret,id=proxy_ca \
     mkdir -p /var/lib/cot-to-vmf && chown 10001:10001 /var/lib/cot-to-vmf
 COPY --from=build /source/build/release/src/cot-to-vmf /usr/local/bin/
 COPY --from=build /source/build/release/licenses/ /usr/local/share/cot-to-vmf/licenses/
+COPY --chmod=0755 entrypoint.sh /usr/local/bin/entrypoint.sh
+ENV COT_VMF_WORKSPACE=/var/lib/cot-to-vmf
 USER 10001:10001
 WORKDIR /var/lib/cot-to-vmf
 EXPOSE 9001/udp 8080/tcp
 STOPSIGNAL SIGTERM
-ENTRYPOINT ["/usr/local/bin/cot-to-vmf"]
-CMD ["run", "--workspace", "/var/lib/cot-to-vmf", "--log-format", "json"]
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+CMD ["run"]

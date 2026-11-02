@@ -79,31 +79,9 @@ bool cv_workspace_parse(bridge_context *source, const uint8_t *data,
 	if (!bridge_mapping_config_parse(source, data, size))
 		return false;
 	yyjson_val *root = yyjson_doc_get_root(source->config);
-	static const char *const allowed[] = {"format", "schemas", "outputs",
-					      "service"};
-	yyjson_val *service = yyjson_obj_get(root, "service");
-	static const char *const service_keys[] = {"cot_listen", "vmf_target",
-						   "web_listen", "log_format"};
+	static const char *const allowed[] = {"format", "schemas", "outputs"};
 
-	if (service) {
-		if (!properties(source, service, service_keys, 4))
-			return false;
-		for (size_t i = 0; i < 4; ++i) {
-			yyjson_val *value =
-				yyjson_obj_get(service, service_keys[i]);
-
-			if (!value || (i == 2 && yyjson_is_null(value)))
-				continue;
-			if (!yyjson_is_str(value) ||
-			    std::strlen(yyjson_get_str(value)) !=
-				    yyjson_get_len(value))
-				return bridge_fail(
-					source,
-					"service settings must be strings");
-		}
-	}
-
-	return properties(source, root, allowed, 4) &&
+	return properties(source, root, allowed, 3) &&
 	       (yyjson_equals_str(yyjson_obj_get(root, "format"),
 				  "cot-vmf-workspace/1") ||
 		bridge_fail(source, "expected format cot-vmf-workspace/1")) &&

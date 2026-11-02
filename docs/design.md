@@ -27,6 +27,13 @@ only the executable and user workspace. CivetWeb's C API, pinned through CPM,
 keeps HTTP parsing out of application code. Assets use ordinary DOM/SVG and no
 runtime frontend packages.
 
+The workspace stores schemas and output mappings. Transport endpoints, GUI
+selection, and logging belong to each service invocation. Offline CLI commands
+and live browser edits share native validation and persistence; the CLI does
+not require HTTP or the GUI. A workspace lock excludes offline writers while
+the service runs. Docker imports optional seed inputs only for a fresh
+workspace, then supplies runtime options on every start.
+
 Web writers serialize edits while validation and persistence run independently
 of UDP processing. A narrow engine lock exchanges the active owner between
 jobs; separate metadata locking protects bounded activity history. Readers

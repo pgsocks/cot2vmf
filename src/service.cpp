@@ -1,4 +1,5 @@
 #include "service.h"
+#include "workspace_store.h"
 #include "web_server.h"
 #include "core/feedback.h"
 #include <cot2vmf/core.h>
@@ -19,12 +20,10 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#define DOCUMENT_LIMIT (16u * 1024u * 1024u)
+#define DOCUMENT_LIMIT WORKSPACE_DOCUMENT_LIMIT
 #define ACTIVITY_HISTORY 256
 #define OUTPUT_LIMIT 128
 
-static const char empty_workspace[] =
-	"{\"format\":\"cot-vmf-workspace/1\",\"schemas\":[],\"outputs\":[]}";
 static volatile sig_atomic_t stopping;
 static volatile sig_atomic_t reloading;
 
@@ -62,7 +61,7 @@ struct service_state {
 	cv_workspace *active;
 	char *draft;
 	size_t draft_size;
-	char directory[PATH_MAX];
+	workspace_store store;
 	uint64_t draft_revision;
 	uint64_t active_revision;
 	uint64_t sequence;
@@ -78,7 +77,6 @@ struct service_state {
 	bool ready;
 	char error[768];
 	int output;
-	int lock_file;
 };
 
 static bool configure_outputs(output_snapshot *snapshot, const char *data,
@@ -177,52 +175,6 @@ static void signal_received(int number)
 		stopping = 1;
 }
 
-static bool read_file(const char *path, char **data, size_t *size,
-		      size_t limit = DOCUMENT_LIMIT)
-{
-	*data = nullptr;
-	*size = 0;
-	int fd = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
-
-	if (fd < 0)
-		return false;
-	struct stat info = {};
-
-	if (fstat(fd, &info) || !S_ISREG(info.st_mode) || info.st_size < 1 ||
-	    static_cast<uint64_t>(info.st_size) > limit) {
-		close(fd);
-		errno = EINVAL;
-		return false;
-	}
-	char *bytes = static_cast<char *>(std::malloc(info.st_size + 1));
-
-	if (!bytes) {
-		close(fd);
-		errno = ENOMEM;
-		return false;
-	}
-	size_t used = 0;
-
-	while (used < static_cast<size_t>(info.st_size)) {
-		ssize_t count = read(fd, bytes + used, info.st_size - used);
-
-		if (count < 0 && errno == EINTR)
-			continue;
-		if (count <= 0) {
-			std::free(bytes);
-			close(fd);
-			errno = EIO;
-			return false;
-		}
-		used += count;
-	}
-	close(fd);
-	bytes[used] = 0;
-	*data = bytes;
-	*size = used;
-	return true;
-}
-
 /* Validate endpoint grammar without DNS lookups or opening sockets. UDP may
  * use a DNS hostname; the embedded HTTP server accepts one numeric IPv4 bind.
  */
@@ -296,177 +248,6 @@ static bool log_valid(const char *value)
 	       (!std::strcmp(value, "human") || !std::strcmp(value, "json"));
 }
 
-static bool load_configuration(const char *data, size_t size,
-			       cv_workspace **result, cv_error *error)
-{
-	if (cv_workspace_load(reinterpret_cast<const uint8_t *>(data), size,
-			      result, error) != CV_OK)
-		return false;
-	yyjson_doc *doc = yyjson_read(data, size, 0);
-	yyjson_val *settings =
-		yyjson_obj_get(yyjson_doc_get_root(doc), "service");
-	static const char *const names[] = {"cot_listen", "vmf_target",
-					    "web_listen", "log_format"};
-	bool valid = doc != nullptr;
-
-	for (size_t i = 0; valid && i < 4; ++i) {
-		yyjson_val *value = yyjson_obj_get(settings, names[i]);
-
-		if (!value || (i == 2 && yyjson_is_null(value)))
-			continue;
-		const char *text = yyjson_get_str(value);
-
-		valid = i == 3 ? log_valid(text) : endpoint_valid(text, i == 2);
-		if (!valid)
-			std::snprintf(error->message, sizeof(error->message),
-				      "Invalid service setting: %s", names[i]);
-	}
-	yyjson_doc_free(doc);
-	if (!valid) {
-		cv_workspace_destroy(*result);
-		*result = nullptr;
-		error->status = CV_INVALID_CONFIG;
-		if (!*error->message)
-			std::snprintf(error->message, sizeof(error->message),
-				      "Cannot validate service settings");
-	}
-	return valid;
-}
-
-static bool make_directory(const char *path)
-{
-	char buffer[PATH_MAX];
-
-	if (!path || !*path || std::strlen(path) >= sizeof(buffer))
-		return false;
-	std::strcpy(buffer, path);
-	for (char *p = buffer + 1;; ++p) {
-		if (*p && *p != '/')
-			continue;
-		char saved = *p;
-
-		*p = 0;
-		if (mkdir(buffer, 0700) && errno != EEXIST)
-			return false;
-		struct stat info = {};
-
-		if (lstat(buffer, &info) || !S_ISDIR(info.st_mode))
-			return false;
-		*p = saved;
-		if (!saved)
-			return true;
-	}
-}
-
-static bool persist(service_state *state, const char *name, const char *data,
-		    size_t size, uint64_t revision)
-{
-	yyjson_doc *source = yyjson_read(data, size, 0);
-	size_t workspace_size = 0;
-	char *workspace = source ? yyjson_write(source, 0, &workspace_size)
-				 : nullptr;
-
-	yyjson_doc_free(source);
-	/* Numeric tokens can grow during serialization. Bound the saved
-	 * representation before publishing either state file.
-	 */
-	if (!workspace || workspace_size > DOCUMENT_LIMIT) {
-		std::free(workspace);
-		return false;
-	}
-	yyjson_mut_doc *doc = yyjson_mut_doc_new(nullptr);
-
-	if (!doc) {
-		std::free(workspace);
-		return false;
-	}
-	yyjson_mut_val *root = yyjson_mut_obj(doc);
-
-	bool complete =
-		root &&
-		yyjson_mut_obj_add_uint(doc, root, "revision", revision) &&
-		yyjson_mut_obj_add_val(
-			doc, root, "workspace",
-			yyjson_mut_rawn(doc, workspace, workspace_size));
-
-	yyjson_mut_doc_set_root(doc, root);
-	size_t length = 0;
-	char *serialized =
-		complete ? yyjson_mut_write(doc, 0, &length) : nullptr;
-	char destination[PATH_MAX];
-	char temporary[PATH_MAX];
-	bool good = serialized &&
-		    std::snprintf(destination, sizeof(destination),
-				  "%s/%s.json", state->directory, name) <
-			    static_cast<int>(sizeof(destination)) &&
-		    std::snprintf(temporary, sizeof(temporary), "%s/.%s-XXXXXX",
-				  state->directory,
-				  name) < static_cast<int>(sizeof(temporary));
-	int fd = good ? mkstemp(temporary) : -1;
-
-	good = fd >= 0;
-	size_t used = 0;
-
-	while (good && used < length) {
-		ssize_t count = write(fd, serialized + used, length - used);
-
-		if (count < 0 && errno == EINTR)
-			continue;
-		if (count <= 0)
-			good = false;
-		else
-			used += count;
-	}
-	if (fd >= 0) {
-		if (good && fsync(fd))
-			good = false;
-		if (close(fd))
-			good = false;
-		if (good && rename(temporary, destination))
-			good = false;
-		if (!good)
-			unlink(temporary);
-	}
-	std::free(serialized);
-	yyjson_mut_doc_free(doc);
-	std::free(workspace);
-	return good;
-}
-
-/* Missing state is distinct from damaged state. Never silently fall back
- * to an invalid draft or receive-only mode after a saved-state error.
- */
-static int restore(service_state *state, const char *name, char **data,
-		   size_t *size, uint64_t *revision)
-{
-	char path[PATH_MAX];
-
-	if (std::snprintf(path, sizeof(path), "%s/%s.json", state->directory,
-			  name) >= static_cast<int>(sizeof(path)))
-		return -1;
-	char *bytes = nullptr;
-	size_t length = 0;
-
-	/* Saved revision metadata wraps a full-size workspace document. */
-	if (!read_file(path, &bytes, &length, DOCUMENT_LIMIT + 128))
-		return errno == ENOENT ? 0 : -1;
-	yyjson_doc *doc = yyjson_read(bytes, length, 0);
-	yyjson_val *root = doc ? yyjson_doc_get_root(doc) : nullptr;
-	yyjson_val *rev = yyjson_obj_get(root, "revision");
-	yyjson_val *workspace = yyjson_obj_get(root, "workspace");
-	bool valid = yyjson_is_obj(root) && yyjson_is_uint(rev) &&
-		     yyjson_is_obj(workspace) && yyjson_obj_size(root) == 2;
-
-	if (valid) {
-		*revision = yyjson_get_uint(rev);
-		*data = yyjson_val_write(workspace, 0, size);
-		valid = *data != nullptr;
-	}
-	yyjson_doc_free(doc);
-	std::free(bytes);
-	return valid ? 1 : -1;
-}
-
 /* edit serializes writers only. Validation and filesystem publication occur
  * without holding engine, so HTTP clients cannot stall UDP with file I/O.
  */
@@ -487,7 +268,7 @@ static draft_result replace_draft(service_state *state, const char *data,
 	copy[size] = 0;
 	cv_workspace *candidate = nullptr;
 	cv_error error = {};
-	bool valid = load_configuration(data, size, &candidate, &error);
+	bool valid = workspace_validate(data, size, &candidate, &error);
 	output_snapshot outputs = {};
 
 	if (valid && !configure_outputs(&outputs, data, size, revision)) {
@@ -496,14 +277,17 @@ static draft_result replace_draft(service_state *state, const char *data,
 			      "Cannot prepare output feedback");
 	}
 
-	if (!persist(state, "draft", data, size, revision)) {
+	workspace_publish_result published = workspace_publish(
+		&state->store, data, size, revision, valid);
+
+	if (published == WORKSPACE_DRAFT_FAILED) {
 		cv_workspace_destroy(candidate);
 		std::free(copy);
 		return DRAFT_SAVE_FAILED;
 	}
 	draft_result result = DRAFT_SAVED;
 
-	if (valid && !persist(state, "active", data, size, revision)) {
+	if (published == WORKSPACE_ACTIVE_FAILED) {
 		result = ACTIVE_SAVE_FAILED;
 		valid = false;
 		std::snprintf(error.message, sizeof(error.message),
@@ -828,76 +612,21 @@ static bool publish(void *user, const char *, const uint8_t *data, size_t size)
 static bool initialize(service_state *state, const service_options *options,
 		       char **initial, size_t *initial_size)
 {
-	const char *directory = options->workspace;
-	char default_directory[PATH_MAX];
-
-	if (!directory) {
-		const char *xdg = std::getenv("XDG_STATE_HOME");
-		const char *home = std::getenv("HOME");
-		int length;
-
-		if (xdg && *xdg)
-			length = std::snprintf(default_directory,
-					       sizeof(default_directory),
-					       "%s/cot-to-vmf", xdg);
-		else
-			length = std::snprintf(default_directory,
-					       sizeof(default_directory),
-					       "%s/.local/state/cot-to-vmf",
-					       home ? home : ".");
-
-		if (length >= static_cast<int>(sizeof(default_directory)))
-			return false;
-		directory = default_directory;
-	}
-	if (std::strlen(directory) >= sizeof(state->directory) ||
-	    !make_directory(directory))
+	if (!workspace_open(&state->store, options->workspace, true))
 		return false;
-	std::strcpy(state->directory, directory);
-	char lock_path[PATH_MAX];
+	int restored = workspace_restore(&state->store, "active", initial,
+					 initial_size, &state->active_revision);
 
-	if (std::snprintf(lock_path, sizeof(lock_path), "%s/.lock",
-			  directory) >= static_cast<int>(sizeof(lock_path)))
+	if (restored < 0)
 		return false;
-	state->lock_file = open(
-		lock_path, O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0600);
-	if (state->lock_file < 0 || flock(state->lock_file, LOCK_EX | LOCK_NB))
-		return false;
-	if (options->config) {
-		uint64_t maximum = 0;
-		const char *names[] = {"active", "draft"};
-
-		for (const char *name : names) {
-			char *saved = nullptr;
-			size_t size = 0;
-			uint64_t revision = 0;
-			int restored = restore(state, name, &saved, &size,
-					       &revision);
-
-			std::free(saved);
-			if (restored < 0 || revision == UINT64_MAX)
-				return false;
-			if (revision > maximum)
-				maximum = revision;
-		}
-		if (!read_file(options->config, initial, initial_size))
-			return false;
-		state->active_revision = maximum + 1;
-	} else {
-		int restored = restore(state, "active", initial, initial_size,
-				       &state->active_revision);
-
-		if (restored < 0)
-			return false;
-		if (!restored) {
-			*initial = strdup(empty_workspace);
-			*initial_size = sizeof(empty_workspace) - 1;
-		}
+	if (!restored) {
+		*initial = strdup(workspace_empty);
+		*initial_size = std::strlen(workspace_empty);
 	}
 	cv_error error = {};
 
-	if (!*initial || !load_configuration(*initial, *initial_size,
-					     &state->active, &error)) {
+	if (!*initial || !workspace_validate(*initial, *initial_size,
+					      &state->active, &error)) {
 		std::snprintf(state->error, sizeof(state->error), "%s",
 			      error.message);
 		return false;
@@ -908,18 +637,9 @@ static bool initialize(service_state *state, const service_options *options,
 			      "Cannot prepare output feedback");
 		return false;
 	}
-	if (options->config) {
-		if (!persist(state, "draft", *initial, *initial_size,
-			     state->active_revision) ||
-		    !persist(state, "active", *initial, *initial_size,
-			     state->active_revision))
-			return false;
-	}
-	int restored = options->config ? 0
-				       : restore(state, "draft", &state->draft,
-						 &state->draft_size,
-						 &state->draft_revision);
-
+	restored = workspace_restore(&state->store, "draft", &state->draft,
+				     &state->draft_size,
+				     &state->draft_revision);
 	if (restored < 0)
 		return false;
 	if (!restored) {
@@ -931,8 +651,8 @@ static bool initialize(service_state *state, const service_options *options,
 		return false;
 	cv_workspace *draft = nullptr;
 
-	state->valid = load_configuration(state->draft, state->draft_size,
-					  &draft, &error);
+	state->valid = workspace_validate(state->draft, state->draft_size,
+					 &draft, &error);
 	cv_workspace_destroy(draft);
 	/* A saved draft can outlive an interrupted or failed publication. */
 	if (state->valid && state->draft_revision != state->active_revision) {
@@ -945,28 +665,44 @@ static bool initialize(service_state *state, const service_options *options,
 	return true;
 }
 
-int service_validate(const char *path)
+/* Reload the saved active snapshot without publishing an edit or replacing
+ * a pending draft. Run options and the workspace writer lock stay in force.
+ */
+static bool reload_active(service_state *state)
 {
 	char *data = nullptr;
 	size_t size = 0;
-
-	if (!read_file(path, &data, &size)) {
-		std::fputs("Cannot read configuration\n", stderr);
-		return 2;
-	}
-	cv_workspace *workspace = nullptr;
+	uint64_t revision = 0;
+	cv_workspace *candidate = nullptr;
 	cv_error error = {};
-	bool valid = load_configuration(data, size, &workspace, &error);
+	output_snapshot outputs = {};
+	bool valid = workspace_restore(&state->store, "active", &data, &size,
+				       &revision) == 1 &&
+		     workspace_validate(data, size, &candidate, &error) &&
+		     configure_outputs(&outputs, data, size, revision);
 
-	std::free(data);
-	cv_workspace_destroy(workspace);
-	if (!valid) {
-		std::fprintf(stderr, "Invalid configuration: %s\n",
-			     error.message);
-		return 2;
+	if (valid) {
+		pthread_mutex_lock(&state->engine);
+		cv_workspace *old = state->active;
+
+		state->active = candidate;
+		candidate = nullptr;
+		cv_workspace_destroy(old);
+		pthread_mutex_lock(&state->metadata);
+		state->active_revision = revision;
+		state->outputs = outputs;
+		if (state->valid && state->draft_revision != revision) {
+			state->valid = false;
+			std::snprintf(state->error, sizeof(state->error),
+				      "Saved draft has not been activated");
+		}
+		++state->sequence;
+		pthread_mutex_unlock(&state->metadata);
+		pthread_mutex_unlock(&state->engine);
 	}
-	std::puts("Configuration is valid");
-	return 0;
+	cv_workspace_destroy(candidate);
+	std::free(data);
+	return valid;
 }
 
 int service_run(const service_options *options)
@@ -977,7 +713,7 @@ int service_run(const service_options *options)
 	pthread_mutex_init(&state.engine, nullptr);
 	pthread_mutex_init(&state.metadata, nullptr);
 	state.output = -1;
-	state.lock_file = -1;
+	state.store.lock_file = -1;
 	char *initial = nullptr;
 	size_t initial_size = 0;
 	int result = 2;
@@ -1003,39 +739,16 @@ int service_run(const service_options *options)
 		goto cleanup;
 	}
 	{
-		yyjson_doc *config = yyjson_read(initial, initial_size, 0);
-		yyjson_val *settings =
-			yyjson_obj_get(yyjson_doc_get_root(config), "service");
-		const char *cot = options->cot_listen
-					  ? options->cot_listen
-					  : yyjson_get_str(yyjson_obj_get(
-						    settings, "cot_listen"));
-		const char *vmf = options->vmf_target
-					  ? options->vmf_target
-					  : yyjson_get_str(yyjson_obj_get(
-						    settings, "vmf_target"));
+		const char *cot = options->cot_listen;
+		const char *vmf = options->vmf_target;
 		const char *web_listen = options->web_listen;
 
-		if (!web_listen)
-			web_listen = yyjson_get_str(
-				yyjson_obj_get(settings, "web_listen"));
-		const char *log = options->log_format
-					  ? options->log_format
-					  : yyjson_get_str(yyjson_obj_get(
-						    settings, "log_format"));
-
-		if (log && std::strcmp(log, "json") &&
-		    std::strcmp(log, "human")) {
-			std::fputs("Invalid log format\n", stderr);
-			yyjson_doc_free(config);
-			goto cleanup;
-		}
-		state.json_log = log && !std::strcmp(log, "json");
+		state.json_log = options->log_format &&
+				 !std::strcmp(options->log_format, "json");
 		input = udp_socket(cot ? cot : "0.0.0.0:9001", true);
 		state.output = udp_socket(vmf ? vmf : "127.0.0.1:9002", false);
 		if (input < 0 || state.output < 0) {
 			std::fputs("Cannot configure UDP sockets\n", stderr);
-			yyjson_doc_free(config);
 			result = 1;
 			goto cleanup;
 		}
@@ -1057,18 +770,15 @@ int service_run(const service_options *options)
 					     sizeof(error))) {
 				std::fprintf(stderr, "Web listener: %s\n",
 					     error);
-				yyjson_doc_free(config);
 				result = 1;
 				goto cleanup;
 			}
 #else
 			std::fputs("Web support disabled at build time\n",
 				   stderr);
-			yyjson_doc_free(config);
 			goto cleanup;
 #endif
 		}
-		yyjson_doc_free(config);
 	}
 	state.ready = true;
 	std::puts(state.json_log ? "{\"event\":\"ready\"}"
@@ -1078,30 +788,10 @@ int service_run(const service_options *options)
 	while (!stopping) {
 		if (reloading) {
 			reloading = 0;
-			char *data = nullptr;
-			size_t size = 0;
-			uint64_t revision = 0;
-			bool loaded;
-
 			pthread_mutex_lock(&state.edit);
-			if (options->config)
-				loaded = read_file(options->config, &data,
-						   &size);
-			else
-				loaded = restore(&state, "active", &data, &size,
-						 &revision) == 1;
-
-			draft_result saved = DRAFT_SAVE_FAILED;
-
-			if (loaded && state.draft_revision < UINT64_MAX) {
-				uint64_t next = state.draft_revision + 1;
-
-				saved = replace_draft(&state, data, size, next);
-			}
-			bool valid = saved == DRAFT_SAVED && state.valid;
+			bool valid = reload_active(&state);
 
 			pthread_mutex_unlock(&state.edit);
-			std::free(data);
 			std::puts(state.json_log
 					  ? (valid ? "{\"event\":\"reloaded\"}"
 						   : "{\"event\":\"reload_"
@@ -1184,8 +874,7 @@ cleanup:
 		close(input);
 	if (state.output >= 0)
 		close(state.output);
-	if (state.lock_file >= 0)
-		close(state.lock_file);
+	workspace_close(&state.store);
 	cv_workspace_destroy(state.active);
 	std::free(initial);
 	std::free(state.draft);

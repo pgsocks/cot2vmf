@@ -8,7 +8,8 @@ target_include_directories(cot2vmf PUBLIC
 target_link_libraries(cot2vmf PUBLIC cot::cot vmf::vmf vmf::schema_json
 	vmf::header_json yyjson)
 
-add_executable(cot-to-vmf main.cpp service.cpp)
+add_executable(cot-to-vmf main.cpp service.cpp workspace_store.cpp
+	workspace_cli.cpp)
 target_link_libraries(cot-to-vmf PRIVATE cot2vmf Threads::Threads)
 target_compile_definitions(cot-to-vmf PRIVATE
 	COT_VMF_VERSION="${PROJECT_VERSION}")

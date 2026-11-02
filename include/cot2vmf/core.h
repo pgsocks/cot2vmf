@@ -64,8 +64,8 @@ typedef struct cv_activity {
  * No schema paths are resolved. Duplicate ids/keys and unknown properties fail.
  * Enabled outputs must be completely valid; disabled outputs may be drafts.
  * Arrays contain at most 128 entries; ids contain 1..128 UTF-8 bytes, no NUL.
- * Optional service settings are validated strings and otherwise ignored here;
- * web_listen additionally permits null. An empty workspace is valid.
+ * Workspaces contain format, schemas, and outputs only. Runtime settings are
+ * not workspace properties. An empty workspace is valid.
  * result is required, cleared on all failures. Input/output storage must not
  * overlap and result must not overwrite an existing live owner.
  * Owned storage is bounded; callers release the successful owner with destroy.

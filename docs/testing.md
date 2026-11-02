@@ -46,6 +46,10 @@ repeat/presence controls, all envelope profiles, ownership, concurrent reads,
 output isolation, catalog metadata, and UDP size limits. Service scenarios
 cover receive-only behavior, malformed input recovery, multiple outputs,
 reloads, optimistic edits, activity, persistence, and restart recovery.
+CLI scenarios cover offline imports and edits, export and validation, invalid
+draft retention, runtime-only options, workspace selection, and writer locking.
+Entrypoint scenarios exercise runtime overrides and one-time seeding without
+requiring Docker in the native test suite.
 
 ## Browser checks
 

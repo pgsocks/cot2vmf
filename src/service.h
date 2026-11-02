@@ -2,7 +2,6 @@
 #define COT_VMF_SERVICE_H
 
 struct service_options {
-	const char *config;
 	const char *workspace;
 	const char *cot_listen;
 	const char *vmf_target;
@@ -14,6 +13,5 @@ struct service_options {
  * orderly SIGINT/SIGTERM returns 0. All strings are borrowed until return.
  */
 int service_run(const service_options *options);
-int service_validate(const char *path);
 
 #endif

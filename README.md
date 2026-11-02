@@ -35,8 +35,9 @@ To start with the synthetic two-output example:
 
 ```sh
 build/src/cot-to-vmf validate examples/synthetic.workspace.json
-build/src/cot-to-vmf run --config examples/synthetic.workspace.json \
-  --workspace ./workspace --web 127.0.0.1:8080
+build/src/cot-to-vmf config --workspace ./workspace \
+  --config examples/synthetic.workspace.json
+build/src/cot-to-vmf run --workspace ./workspace --web 127.0.0.1:8080
 ```
 
 Configure Gateway's UDP output host and port to reach the translator. Gateway
@@ -44,10 +45,17 @@ sends one complete XML event per datagram. The translator does not connect
 directly to TAK Server. Each enabled output attempts one VMF message per event;
 each successful PDU is sent in its own datagram.
 
-`SIGINT` and `SIGTERM` stop gracefully. `SIGHUP` reloads the configured file;
-transport changes take effect after restart. Without `--config`, restart uses
-the saved active workspace. `--help` lists endpoint and logging options. The
-`headless` preset omits web support; the `release` preset builds production
+`config` edits schemas and mappings while the service is stopped. `export`
+writes the saved draft as JSON; `validate` checks it without changing state.
+Invalid edits remain saved as drafts while the last valid configuration stays
+active. Network endpoints, the optional GUI, and logging are run options and
+are never stored in the workspace.
+
+`SIGINT` and `SIGTERM` stop gracefully. `SIGHUP` reloads saved active state;
+it does not reread imported files, change saved configuration, or change run
+options. Restart uses the saved active workspace. `--help` lists commands and
+startup options. The `headless` preset omits web support; the `release` preset
+builds production
 artifacts without test tooling.
 
 ## Docker and background operation
@@ -57,8 +65,10 @@ docker compose -f deploy/compose.yaml up --build -d
 ```
 
 The Compose example persists the workspace and publishes UDP 9001 and the
-browser on host loopback. See [deployment](docs/deployment.md) for network
-settings, persistent storage, and service-manager operation.
+browser on host loopback. The image starts with the GUI and JSON logging;
+`run --no-web` disables the GUI. Optional environment inputs seed schemas and
+mappings once, preserving subsequent edits. See [deployment](docs/deployment.md)
+for runtime settings, seed inputs, persistent storage, and offline commands.
 
 Stop with `docker compose -f deploy/compose.yaml down`.
 

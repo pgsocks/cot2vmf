@@ -1,9 +1,8 @@
 services:
   translator:
     image: cot-to-vmf:local
-    command: [run, --workspace, /var/lib/cot-to-vmf, --cot-listen,
-              "0.0.0.0:9001", --vmf-target, "collector:9002", --web,
-              "0.0.0.0:8080", --log-format, json]
+    environment:
+      COT_VMF_VMF_TARGET: collector:9002
     volumes:
       - workspace:/var/lib/cot-to-vmf
     restart: "no"

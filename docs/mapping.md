@@ -8,18 +8,14 @@ illustrates syntax with two synthetic message definitions and outputs.
 {
   "format": "cot-vmf-workspace/1",
   "schemas": [],
-  "outputs": [],
-  "service": {
-    "cot_listen": "0.0.0.0:9001",
-    "vmf_target": "127.0.0.1:9002",
-    "web_listen": "127.0.0.1:8080",
-    "log_format": "json"
-  }
+  "outputs": []
 }
 ```
 
-`service` is optional. Schemas and outputs are required arrays, each bounded
-to 128 entries. Each id is a unique, nonempty string of at most 128 UTF-8 bytes
+Only `format`, `schemas`, and `outputs` are workspace properties. Network
+endpoints, GUI selection, and logging belong to the `run` command; a `service`
+object is rejected. Schemas and outputs are required arrays, each bounded to
+128 entries. Each id is a unique, nonempty string of at most 128 UTF-8 bytes
 without embedded NUL. Unknown properties and duplicate JSON keys fail.
 Documents are bounded to 16 MiB; native loaders and job storage have additional
 bounded budgets. The GUI retains exact integer values above JavaScript's

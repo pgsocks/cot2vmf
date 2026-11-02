@@ -5,7 +5,20 @@ Feature: Continuous CoT translation through UDP
     When the "monitor" service workflow is exercised
     Then all service assertions succeed
 
-  Scenario: Translate multiple outputs and reload configuration
+  Scenario: Import schemas and mappings into persistent configuration offline
+    When the "configuration" service workflow is exercised
+    Then all service assertions succeed
+
+  Scenario: Preserve Docker entrypoint defaults and explicit arguments
+    When the "entrypoint-arguments" service workflow is exercised
+    Then all service assertions succeed
+
+  @web
+  Scenario: Start the Docker service with environment and CLI overrides
+    When the "entrypoint" service workflow is exercised
+    Then all service assertions succeed
+
+  Scenario: Translate saved outputs and apply offline edits after restart
     When the "translation" service workflow is exercised
     Then all service assertions succeed
 
@@ -24,7 +37,7 @@ Feature: Continuous CoT translation through UDP
     Then all service assertions succeed
 
   @web
-  Scenario: Reject stale edits across explicit configuration restarts
+  Scenario: Reject stale edits across offline configuration replacements
     When the "revisions" service workflow is exercised
     Then all service assertions succeed
 

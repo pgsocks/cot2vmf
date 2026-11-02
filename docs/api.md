@@ -8,33 +8,79 @@ The complete native declarations and ownership rules are in
 ## CLI
 
 `cot-to-vmf run` receives continuously. Omitting the command also selects
-`run`. Options accept separate values; duplicate and unknown options fail.
+`run`. Runtime options select network endpoints, the GUI, and logging; they
+are not persistent configuration. Options take separate values. Unknown or
+duplicate scalar options fail, and `--web` and `--no-web` are mutually exclusive.
 
-| Option | Behavior |
+| Run option | Behavior |
 | --- | --- |
-| `--config FILE` | Load a bare `cot-vmf-workspace/1` document on startup |
-| `--workspace DIR` | Store active state and editable drafts |
+| `--workspace DIR` | Select persistent drafts and active configuration |
 | `--cot-listen HOST:PORT` | IPv4 UDP bind; default `0.0.0.0:9001` |
 | `--vmf-target HOST:PORT` | IPv4 UDP destination; default `127.0.0.1:9002` |
-| `--web HOST:PORT` | Enable HTTP GUI on a numeric IPv4 bind address |
+| `--web [HOST:PORT]` | Enable the GUI; omitted address means `0.0.0.0:8080` |
+| `--no-web` | Disable the GUI; native runs are headless by default |
 | `--log-format human\|json` | Reception/status output; default human |
 
-Workspace `service` settings use `cot_listen`, `vmf_target`, `web_listen`, and
-`log_format`. CLI values override them. Null or absent `web_listen` disables
-the GUI. Transport/log settings are startup settings; live edits and SIGHUP
-do not rebind sockets. Without an explicit directory, use
-`$XDG_STATE_HOME/cot-to-vmf`, or `$HOME/.local/state/cot-to-vmf`.
+Every workspace command selects its directory using `--workspace`, then
+`COT_VMF_WORKSPACE`, then `$XDG_STATE_HOME/cot-to-vmf`, then
+`$HOME/.local/state/cot-to-vmf`. Empty environment values do not select a
+workspace. Imported files supply schemas and mappings, never startup options.
 
-`validate FILE` loads configuration without receiving or writing state.
-It returns 0 on success and 2 for unreadable or invalid configuration.
-`--help` and `--version` return 0. Runtime setup/configuration errors return 2,
-socket or web startup/runtime I/O errors return 1, and orderly shutdown 0.
+### Offline configuration
 
-SIGINT/SIGTERM stop intake and join web workers. SIGHUP reloads `--config`,
-or the saved active state when no initial file was specified. A failed reload
+`cot-to-vmf config [options]` edits the saved draft. The service must be stopped:
+configuration writers take the same exclusive workspace lock as the service.
+Read-only `export` and `validate` remain available while the service runs.
+
+| Config option | Behavior |
+| --- | --- |
+| `--config FILE` | Use one bare workspace document as the starting point |
+| `--schema ID=FILE` | Add or replace a schema with a native `vmf-schema/1` document |
+| `--mapping ID=FILE` | Add or replace an output with a bare `cot-vmf-mapping-config/1` document |
+| `--remove-schema ID` | Remove the schema and its referencing outputs |
+| `--remove-mapping ID` | Remove the output identified by ID |
+| `--set PATH=JSON` | Set a workspace value using dotted keys and zero-based `[index]` components |
+| `--if-uninitialized` | Save only if neither active nor draft state exists |
+
+Without `--config`, edits start from the saved draft, or an empty workspace.
+A single `--config` supplies the base regardless of its argument position; all
+other edits run in argument order. Repeated edits use their latest value.
+Removing an unknown ID fails. A newly imported mapping is enabled; replacing
+one preserves its enabled state. `--set` preserves JSON values, including exact
+integers; missing objects and arrays are created, and array appends must be
+contiguous. Sparse array writes and type conflicts fail. Paths begin with a
+nonempty property name; quoted keys, JSON Pointer, and replacing the whole root
+are unsupported. Use `--config FILE` to replace the whole workspace.
+
+All edits are staged before publication. Command-shape, file-reading, JSON
+parsing, and edit-path errors leave state unchanged and return 2. A complete
+valid draft is persisted and made active with exit 0. A semantically invalid
+draft is saved for repair, leaves the previous active configuration unchanged,
+and returns 3. Persistence failures return 1. `config` with no edit options
+saves the current draft and can initialize an empty workspace.
+
+`--if-uninitialized` checks under the workspace lock. Either saved state file
+counts as initialized, including an invalid draft; existing state skips seed
+inputs rather than reading them again. A fresh workspace is initialized even
+without seed options. Corrupt state is an error, never a reason to reseed.
+
+`cot-to-vmf export [--active]` writes a bare workspace JSON document to stdout;
+it selects the saved draft unless `--active` is supplied.
+`cot-to-vmf validate [FILE]` checks a bare document, or the saved draft when
+FILE is absent, without receiving traffic or writing state. Validation returns
+0 on success and 2 for unreadable or invalid configuration. `--help` and
+`--version` return 0. Orderly service shutdown returns 0; runtime setup or
+argument errors return 2, and service I/O errors return 1.
+Reading a nonexistent workspace exports an empty document or validates the
+empty workspace successfully, without creating the directory or state files.
+
+SIGINT/SIGTERM stop intake and join web workers. SIGHUP reloads saved active
+state without changing saved configuration or runtime options. It never
+rereads imported source files or discards a pending draft. A failed reload
 retains the previous active configuration. Corrupt saved active state prevents
 startup; a saved invalid draft is restored for repair while the saved active
-configuration continues.
+configuration continues. Without an active configuration the service runs
+receive-only.
 
 ## Intake and publication
 
@@ -81,9 +127,9 @@ for an operator-controlled network. Assets require no outside resources.
 Every accepted edit increments the draft revision. A complete valid candidate
 is persisted before activation between processing jobs. Failed validation or
 active publication retains the old active revision. Draft and active files
-wrap the workspace as `{revision, workspace}`; `--config` accepts the bare
-workspace. Publication guarantees atomic visibility, not directory-level crash
-durability. State files are private and require a writable workspace.
+wrap the workspace as `{revision, workspace}`; `config --config` accepts the
+bare workspace. Publication guarantees atomic visibility, not directory-level
+crash durability. State files are private and require a writable workspace.
 
 Activity history and web clients are bounded. Slow clients do not own the UDP
 worker; intermediate events may be coalesced into presence pulses. Reconnection

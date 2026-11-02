@@ -23,6 +23,13 @@ EVENT = (b'<event version="2.0" uid="synthetic-service" type="a-f-G" '
          b'<point lat="1.25" lon="-2.5" hae="0" ce="0" le="0"/>'
          b'<detail><contact callsign="synthetic"/></detail></event>')
 
+ENTRYPOINT = Path(__file__).resolve().parents[2] / "entrypoint.sh"
+ENTRYPOINT_RUNTIME_ENV = ("COT_VMF_WORKSPACE", "COT_VMF_WEB_LISTEN",
+                         "COT_VMF_LOG_FORMAT", "COT_VMF_COT_LISTEN",
+                         "COT_VMF_VMF_TARGET")
+ENTRYPOINT_ENV = ENTRYPOINT_RUNTIME_ENV + (
+    "COT_VMF_CONFIG_FILE", "COT_VMF_SCHEMAS", "COT_VMF_MAPPINGS", "COT_VMF_SET")
+
 
 def fixture():
     indexes = [
@@ -64,9 +71,149 @@ def unused_port(kind):
         return sock.getsockname()[1]
 
 
+def command(binary, *arguments, status=0, environment=None):
+    result = subprocess.run([binary, *map(str, arguments)],
+                            capture_output=True, timeout=10, env=environment)
+    assert result.returncode == status, (
+        f"{arguments[0]} returned {result.returncode}, expected {status}: " +
+        result.stderr.decode())
+    return result
+
+
+def configure(binary, root, *arguments, status=0):
+    return command(binary, "config", "--workspace", root,
+                   *arguments, status=status)
+
+
+def exported(binary, root, active=False):
+    arguments = ["export", "--workspace", root]
+    if active:
+        arguments.append("--active")
+    return json.loads(command(binary, *arguments).stdout)
+
+
+def saved_files(root):
+    return {name: (root / name).read_bytes()
+            for name in ("active.json", "draft.json")
+            if (root / name).exists()}
+
+
+def configuration(binary, root):
+    source = root.parent / "initial.json"
+    source.write_text(json.dumps(fixture()))
+    command(binary, "validate", source)
+    configure(binary, root, "--config", source)
+    assert exported(binary, root) == fixture()
+    assert exported(binary, root, active=True) == fixture()
+    environment = dict(os.environ, COT_VMF_WORKSPACE=str(root))
+    assert json.loads(command(binary, "export", environment=environment).stdout) == fixture()
+    before = saved_files(root)
+    command(binary, "validate", "--workspace", root)
+    configure(binary, root, "--if-uninitialized", "--config", "missing.json",
+              "--set", "not a valid assignment")
+    assert saved_files(root) == before
+
+    configure(binary, root, "--set", "outputs[0].enabled=false",
+              "--config", source)
+    expected = fixture()
+    expected["outputs"][0]["enabled"] = False
+    assert exported(binary, root) == expected, "base import must precede edits"
+
+    schema = root.parent / "schema.json"
+    definition = fixture()["schemas"][0]["document"]
+    definition["messages"][0]["indexes"][0]["number_of_bits"] = 33
+    schema.write_text(json.dumps(definition))
+    mapping = root.parent / "mapping.json"
+    mapping.write_text(json.dumps(fixture()["outputs"][0]["mapping"]))
+    configure(binary, root, "--schema", "synthetic=" + str(schema),
+              "--mapping", "extra=" + str(mapping))
+    assert len(exported(binary, root)["schemas"]) == 1
+    assert exported(binary, root)["schemas"][0]["document"] == definition
+    assert exported(binary, root)["outputs"][-1]["enabled"]
+    definition = fixture()["outputs"][0]["mapping"]
+    definition["fields"][0]["factor"] = 2
+    mapping.write_text(json.dumps(definition))
+    configure(binary, root, "--set", "outputs[2].enabled=false",
+              "--mapping", "extra=" + str(mapping),
+              "--set", 'outputs[2].mapping.notes.rows[0]={"n":18446744073709551615}',
+              "--set", 'outputs[2].mapping.notes.rows[1]={"n":-9223372036854775808}')
+    current = exported(binary, root)
+    assert not current["outputs"][2]["enabled"], "upsert enabled a disabled mapping"
+    assert current["outputs"][2]["mapping"]["fields"][0]["factor"] == 2
+    assert current["outputs"][2]["mapping"]["notes"]["rows"] == [
+        {"n": 18446744073709551615}, {"n": -9223372036854775808}]
+    before = saved_files(root)
+    for assignment in ("outputs[2].mapping.notes.rows[3]=0",
+                       "outputs[2].mapping.notes.rows[0].n.child=0",
+                       "outputs[2].enabled=invalid-json", "outputs[-1]=0"):
+        configure(binary, root, "--set", assignment, status=2)
+        assert saved_files(root) == before
+    malformed = root.parent / "malformed.json"
+    malformed.write_text('{"format":')
+    for path in (malformed, root.parent / "missing.json"):
+        configure(binary, root, "--config", path, status=2)
+        assert saved_files(root) == before
+
+    active = exported(binary, root, active=True)
+    configure(binary, root, "--set",
+              'schemas[0].document.format="invalid"', status=3)
+    assert exported(binary, root)["schemas"][0]["document"]["format"] == "invalid"
+    assert exported(binary, root, active=True) == active
+    command(binary, "validate", "--workspace", root, status=2)
+    before = saved_files(root)
+    configure(binary, root, "--if-uninitialized", "--config", "missing.json")
+    assert saved_files(root) == before, "invalid saved draft was reinitialized"
+    configure(binary, root, "--set",
+              'schemas[0].document.format="vmf-schema/1"')
+
+    configure(binary, root, "--schema", "second=" + str(schema))
+    definition = fixture()["outputs"][0]["mapping"]
+    definition["schema"] = "second"
+    mapping.write_text(json.dumps(definition))
+    configure(binary, root, "--mapping", "second-out=" + str(mapping),
+              "--remove-schema", "synthetic")
+    current = exported(binary, root)
+    assert [row["id"] for row in current["schemas"]] == ["second"]
+    assert [row["id"] for row in current["outputs"]] == ["second-out"]
+    configure(binary, root, "--remove-mapping", "second-out")
+    assert exported(binary, root)["outputs"] == []
+
+    empty_root = root.parent / "empty"
+    configure(binary, empty_root, "--if-uninitialized")
+    assert exported(binary, empty_root) == {
+        "format": "cot-vmf-workspace/1", "schemas": [], "outputs": []}
+    invalid_root = root.parent / "first-invalid"
+    malformed.write_text('{"format":"invalid","schemas":[],"outputs":[]}')
+    configure(binary, invalid_root, "--config", malformed, status=3)
+    assert not (invalid_root / "active.json").exists()
+    assert exported(binary, invalid_root)["format"] == "invalid"
+    service = Service(binary, invalid_root)
+    try:
+        service.send()
+        service.output.settimeout(.2)
+        try:
+            service.output.recv(65535)
+            raise AssertionError("invalid first draft emitted VMF")
+        except socket.timeout:
+            pass
+        assert service.proc.poll() is None
+    finally:
+        service.close()
+    before = saved_files(invalid_root)
+    configure(binary, invalid_root, "--if-uninitialized", "--set", "bad")
+    assert saved_files(invalid_root) == before
+
+    (invalid_root / "draft.json").write_text('{"corrupt":true}')
+    before = saved_files(invalid_root)
+    configure(binary, invalid_root, "--if-uninitialized", status=2)
+    assert saved_files(invalid_root) == before
+
+
 class Service:
     def __init__(self, binary, root, config=None, web=False,
-                 web_bind="127.0.0.1"):
+                 web_bind="127.0.0.1", launch=None):
+        if config:
+            configure(binary, root, "--config", config)
         self.input = unused_port(socket.SOCK_DGRAM)
         self.http = unused_port(socket.SOCK_STREAM) if web else None
         self.output = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -76,15 +223,16 @@ class Service:
                 f"127.0.0.1:{self.input}", "--vmf-target",
                 f"127.0.0.1:{self.output.getsockname()[1]}",
                 "--log-format", "json"]
-        if config:
-            args += ["--config", str(config)]
         if web:
             args += ["--web", f"{web_bind}:{self.http}"]
+        environment = None
+        if launch:
+            args, environment = launch(self, args)
         # Debug HTTP logging can exceed a pipe's capacity during a workflow.
         # Keep diagnostics without blocking the service's worker threads.
         self.errors = tempfile.TemporaryFile()
         self.proc = subprocess.Popen(args, stdout=subprocess.PIPE,
-                                     stderr=self.errors)
+                                     stderr=self.errors, env=environment)
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
             ready, _, _ = select.select([self.proc.stdout], [], [], .1)
@@ -120,6 +268,20 @@ class Service:
         with urllib.request.urlopen(req, timeout=5) as response:
             return json.load(response)
 
+    def reload(self):
+        self.proc.send_signal(signal.SIGHUP)
+        logs = b""
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            if select.select([self.proc.stdout], [], [], .1)[0]:
+                chunk = os.read(self.proc.stdout.fileno(), 4096)
+                assert chunk, "service exited during reload"
+                logs += chunk
+                assert b'"reload_rejected"' not in logs, logs.decode()
+                if b'"reloaded"' in logs:
+                    return
+        raise AssertionError("saved configuration reload did not finish")
+
     def close(self):
         if self.proc.poll() is None:
             self.proc.send_signal(signal.SIGTERM)
@@ -135,6 +297,227 @@ class Service:
             self.errors.close()
             self.output.close()
         assert self.proc.returncode == 0, err.decode()
+
+
+def entrypoint_environment(directory):
+    environment = os.environ.copy()
+    for name in ENTRYPOINT_ENV:
+        environment.pop(name, None)
+    environment["PATH"] = str(directory) + os.pathsep + environment["PATH"]
+    return environment
+
+
+def entrypoint_arguments(binary, root):
+    directory = root.parent / "bin"
+    directory.mkdir()
+    capture = directory / "cot-to-vmf"
+    capture.write_text("#!" + sys.executable + "\n"
+                       "import json, os, sys\n"
+                       "with open(os.environ['CAPTURE_CALLS'], 'a') as output:\n"
+                       "    output.write(json.dumps(sys.argv[1:]) + '\\n')\n"
+                       "key = 'CONFIG_STATUS' if sys.argv[1] == 'config' else 'RUN_STATUS'\n"
+                       "sys.exit(int(os.environ.get(key, 0)))\n")
+    capture.chmod(0o755)
+    environment = entrypoint_environment(directory)
+    calls_file = root.parent / "calls.jsonl"
+    environment.update(CAPTURE_CALLS=str(calls_file), CONFIG_STATUS="0",
+                       RUN_STATUS="0")
+    defaults = {"--workspace": "/var/lib/cot-to-vmf",
+                "--web": "0.0.0.0:8080", "--log-format": "json",
+                "--cot-listen": "0.0.0.0:9001",
+                "--vmf-target": "127.0.0.1:9002"}
+
+    def invoke(arguments=(), variables=None, status=0):
+        calls_file.write_text("")
+        result = subprocess.run(
+            [str(ENTRYPOINT), *arguments],
+            env=dict(environment, **(variables or {})),
+            capture_output=True, text=True, timeout=5)
+        assert result.returncode == status, result.stderr
+        return [json.loads(line) for line in calls_file.read_text().splitlines()]
+
+    def options(arguments):
+        assert arguments[0] == "run", arguments
+        pairs = []
+        index = 1
+        while index < len(arguments):
+            key = arguments[index]
+            if key == "--no-web":
+                pairs.append((key, None))
+                index += 1
+            elif key == "--web" and (index + 1 == len(arguments) or
+                                      arguments[index + 1].startswith("--")):
+                pairs.append((key, None))
+                index += 1
+            else:
+                assert index + 1 < len(arguments), arguments
+                pairs.append((key, arguments[index + 1]))
+                index += 2
+        assert len(dict(pairs)) == len(pairs), arguments
+        return dict(pairs)
+
+    def initialized(arguments=(), variables=None):
+        calls = invoke(arguments, variables)
+        assert len(calls) == 2, calls
+        runtime = options(calls[1])
+        assert calls[0][:4] == ["config", "--if-uninitialized", "--workspace",
+                               runtime["--workspace"]], calls
+        return runtime, calls[0][4:]
+
+    for arguments in ((), ("run",)):
+        runtime, seeds = initialized(arguments)
+        assert runtime == defaults and not seeds
+    empty = dict.fromkeys(ENTRYPOINT_ENV, "")
+    runtime, seeds = initialized(variables=empty)
+    expected = {key: value for key, value in defaults.items() if key != "--web"}
+    expected["--no-web"] = None
+    assert runtime == expected and not seeds
+    values = ("a workspace ; $literal", "127.0.0.1:18080", "human",
+              "127.0.0.1:19001", "receiver:19002")
+    variables = dict(zip(ENTRYPOINT_RUNTIME_ENV, values))
+    expected = dict(zip(("--workspace", "--web", "--log-format",
+                         "--cot-listen", "--vmf-target"), values))
+    assert initialized(variables=variables)[0] == expected
+    explicit = [item for pair in defaults.items() for item in pair]
+    assert initialized(explicit, variables)[0] == defaults
+    assert initialized(["run", *explicit], variables)[0] == defaults
+    assert initialized(["run", "--workspace", "--web"])[0] == dict(
+        defaults, **{"--workspace": "--web"})
+    assert initialized(["run", "--web"])[0] == dict(defaults, **{"--web": None})
+
+    seeds = {"COT_VMF_CONFIG_FILE": "a config ; $literal.json",
+             "COT_VMF_SCHEMAS": "one=a schema.json\n\ntwo=other.json",
+             "COT_VMF_MAPPINGS": "mapped=map.json\n",
+             "COT_VMF_SET": 'outputs[0].enabled=false\noutputs[1].mapping.note="$;"'}
+    assert initialized(variables=seeds)[1] == [
+        "--config", seeds["COT_VMF_CONFIG_FILE"], "--schema", "one=a schema.json",
+        "--schema", "two=other.json", "--mapping", "mapped=map.json",
+        "--set", "outputs[0].enabled=false",
+        "--set", 'outputs[1].mapping.note="$;"']
+    assert len(invoke(variables={"CONFIG_STATUS": "3"})) == 2
+    assert len(invoke(variables={"CONFIG_STATUS": "2"}, status=2)) == 1
+    assert len(invoke(variables={"CONFIG_STATUS": "1"}, status=1)) == 1
+    for arguments in (["--help"], ["--version"], ["help"], ["unknown-command"],
+                      ["config", "--config", "a file.json"], ["export", "--active"],
+                      ["validate", "a config ; $literal.json"],
+                      ["run", "--help"], ["run", "--web", "--help"],
+                      ["run", "--workspace"], ["run", "--unknown", "x"],
+                      ["run", "--web", "--no-web"],
+                      ["run", "--log-format", "json", "--log-format", "human"]):
+        assert invoke(arguments, seeds) == [arguments]
+    assert invoke(["--version"], {"RUN_STATUS": "7"}, status=7) == [["--version"]]
+
+    capture.unlink()
+    capture.symlink_to(binary)
+    for arguments in (["run", "--workspace"], ["run", "--unknown", "x"],
+                      ["run", "--web", "--no-web"],
+                      ["run", "--log-format", "json", "--log-format", "human"]):
+        command(str(ENTRYPOINT), *arguments, status=2, environment=environment)
+
+
+def entrypoint_service(binary, root):
+    directory = root.parent / "bin"
+    directory.mkdir()
+    (directory / "cot-to-vmf").symlink_to(binary)
+    initial = root.parent / "initial.json"
+    initial.write_text(json.dumps(fixture()))
+
+    def launcher(mode, workspace):
+        def launch(service, arguments):
+            environment = entrypoint_environment(directory)
+            environment.update({
+                "COT_VMF_WORKSPACE": str(workspace),
+                "COT_VMF_WEB_LISTEN": f"127.0.0.1:{service.http}",
+                "COT_VMF_LOG_FORMAT": "json",
+                "COT_VMF_COT_LISTEN": f"127.0.0.1:{service.input}",
+                "COT_VMF_VMF_TARGET":
+                    f"127.0.0.1:{service.output.getsockname()[1]}"})
+            if mode == "cli":
+                environment.update(dict.fromkeys(ENTRYPOINT_RUNTIME_ENV, "invalid"))
+                return [str(ENTRYPOINT), *arguments[1:]], environment
+            if mode in ("seed", "invalid"):
+                environment["COT_VMF_CONFIG_FILE"] = str(initial)
+            if mode == "saved":
+                environment.update({"COT_VMF_CONFIG_FILE": str(initial),
+                                    "COT_VMF_SCHEMAS": "bad seed",
+                                    "COT_VMF_MAPPINGS": "bad seed",
+                                    "COT_VMF_SET": "bad seed"})
+            if mode == "headless":
+                environment["COT_VMF_WEB_LISTEN"] = ""
+            return [str(ENTRYPOINT)], environment
+        return launch
+
+    for mode in ("empty", "cli", "headless"):
+        workspace = root / mode
+        service = Service(binary, workspace, web=True,
+                          launch=launcher(mode, workspace))
+        try:
+            if mode == "headless":
+                try:
+                    connection = socket.create_connection(
+                        ("127.0.0.1", service.http), timeout=.2)
+                except OSError:
+                    pass
+                else:
+                    connection.close()
+                    raise AssertionError("empty web environment enabled HTTP")
+            else:
+                assert service.request("GET", "/health")["ready"]
+                with urllib.request.urlopen(
+                        f"http://127.0.0.1:{service.http}/", timeout=5) as response:
+                    assert b"<html" in response.read()
+                assert service.state()["draft"]["schemas"] == []
+                assert service.state()["draft"]["outputs"] == []
+            service.send()
+            if mode != "headless":
+                assert feedback_state(service, 1)["activity"]["decoded"] == 1
+            service.output.settimeout(.2)
+            try:
+                service.output.recv(65535)
+                raise AssertionError("entrypoint emitted VMF without mappings")
+            except socket.timeout:
+                pass
+        finally:
+            service.close()
+
+    workspace = root / "seeded"
+    service = Service(binary, workspace, web=True,
+                      launch=launcher("seed", workspace))
+    try:
+        assert len(service.packets()) == 2
+        before = service.state()
+        document = before["draft"]
+        document["outputs"][1]["enabled"] = False
+        applied = service.request("POST", "/api/state", {
+            "revision": before["draft_revision"], "workspace": document})
+        assert applied["valid"]
+    finally:
+        service.close()
+    initial.unlink()
+    saved = saved_files(workspace)
+    service = Service(binary, workspace, web=True,
+                      launch=launcher("saved", workspace))
+    try:
+        assert service.state()["draft"] == document
+        assert service.state()["active_revision"] == applied["active_revision"]
+        assert saved_files(workspace) == saved, "startup reapplied environment seeds"
+        assert len(service.packets(1)) == 1
+    finally:
+        service.close()
+
+    initial.write_text('{"format":"invalid","schemas":[],"outputs":[]}')
+    workspace = root / "invalid"
+    service = Service(binary, workspace, web=True,
+                      launch=launcher("invalid", workspace))
+    try:
+        state = service.state()
+        assert not state["valid"] and state["active_revision"] == 0
+        repaired = service.request("POST", "/api/state", {
+            "revision": state["draft_revision"], "workspace": fixture()})
+        assert repaired["valid"]
+        assert len(service.packets()) == 2
+    finally:
+        service.close()
 
 
 def monitor(binary, root):
@@ -170,27 +553,25 @@ def validation(binary, root):
                        "127.0.0.1:8080,0.0.0.0:9999"],
         "log_format": ["structured", ""],
     }
+    runtime = {"cot_listen": "--cot-listen", "vmf_target": "--vmf-target",
+               "web_listen": "--web", "log_format": "--log-format"}
     for key, values in invalid.items():
         for value in values:
             document = dict(empty, service={key: value})
             config.write_text(json.dumps(document))
-            result = subprocess.run([binary, "validate", str(config)],
-                                    capture_output=True, timeout=5)
-            assert result.returncode == 2, (key, value, result.stdout)
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as tcp:
-            udp.bind(("127.0.0.1", 0))
-            tcp.bind(("127.0.0.1", 0))
-            tcp.listen()
-            document = dict(empty, service={
-                "cot_listen": f"127.0.0.1:{udp.getsockname()[1]}",
-                "vmf_target": "unresolved-synthetic.example:9002",
-                "web_listen": f"127.0.0.1:{tcp.getsockname()[1]}",
-                "log_format": "human"})
-            config.write_text(json.dumps(document))
-            result = subprocess.run([binary, "validate", str(config)],
-                                    capture_output=True, timeout=5)
-            assert result.returncode == 0, result.stderr.decode()
+            command(binary, "validate", config, status=2)
+            command(binary, "run", "--workspace", root / "invalid-runtime",
+                    runtime[key], value, status=2)
+    config.write_text(json.dumps(empty))
+    command(binary, "validate", config)
+    for settings in ({}, {"cot_listen": "0.0.0.0:9001"},
+                     {"web_listen": None}, {"log_format": "json"}):
+        config.write_text(json.dumps(dict(empty, service=settings)))
+        command(binary, "validate", config, status=2)
+    command(binary, "run", "--workspace", root / "rejected",
+            "--config", config, status=2)
+    command(binary, "run", "--workspace", root / "rejected",
+            "--web", "127.0.0.1:8080", "--no-web", status=2)
 
 
 def large_saved_workspace(binary, root):
@@ -220,15 +601,7 @@ def persistence_size(binary, root):
     validation = subprocess.run([binary, 'validate', str(config)],
                                 capture_output=True, timeout=5)
     assert validation.returncode == 0, validation.stderr.decode()
-    try:
-        rejected = subprocess.run(
-            [binary, 'run', '--config', str(config),
-             '--workspace', str(root / 'rejected'), '--cot-listen',
-             f'127.0.0.1:{unused_port(socket.SOCK_DGRAM)}'],
-            capture_output=True, timeout=5)
-    except subprocess.TimeoutExpired:
-        raise AssertionError('service started with unrestorable saved state')
-    assert rejected.returncode == 2, rejected.stderr.decode()
+    configure(binary, root / 'rejected', '--config', config, status=2)
     assert not (root / 'rejected' / 'active.json').exists()
     assert not (root / 'rejected' / 'draft.json').exists()
 
@@ -241,20 +614,14 @@ def persistence_size(binary, root):
         saved = {name: (workspace / name).read_bytes()
                  for name in ('active.json', 'draft.json')}
         live_config.write_text(document)
-        service.proc.send_signal(signal.SIGHUP)
-        logs = b''
-        deadline = time.monotonic() + 5
-        while b'"reload_rejected"' not in logs:
-            assert time.monotonic() < deadline, 'reload did not finish'
-            if select.select([service.proc.stdout], [], [], .1)[0]:
-                chunk = os.read(service.proc.stdout.fileno(), 4096)
-                assert chunk, 'service exited during reload'
-                logs += chunk
         assert service.packets() == original
         assert all((workspace / name).read_bytes() == data
                    for name, data in saved.items())
     finally:
         service.close()
+    configure(binary, workspace, '--config', live_config, status=2)
+    assert all((workspace / name).read_bytes() == data
+               for name, data in saved.items())
     recovered = Service(binary, workspace)
     try:
         assert recovered.packets() == original
@@ -276,32 +643,25 @@ def translation(binary, root):
             assert service.packets() == original
         service.send(b"bad")
         assert service.packets() == original
-        saved_active = (root / "active.json").read_bytes()
-        saved_draft = ((root / "draft.json").read_bytes()
-                       if (root / "draft.json").exists() else None)
+        before = saved_files(root)
+        configure(binary, root, "--set", "outputs[0].enabled=false", status=2)
+        assert exported(binary, root, active=True) == fixture()
+        command(binary, "validate", "--workspace", root)
+        assert saved_files(root) == before, "offline edit bypassed the run lock"
         config.write_text('{"malformed":')
-        service.proc.send_signal(signal.SIGHUP)
-        time.sleep(.2)
-        assert (root / "active.json").read_bytes() == saved_active
-        if saved_draft is not None:
-            assert (root / "draft.json").read_bytes() == saved_draft
+        service.reload()
         assert service.packets() == original
-        config.write_text('{"format":"invalid"}')
-        service.proc.send_signal(signal.SIGHUP)
-        time.sleep(.2)
+        assert saved_files(root) == before
+        config.unlink()
+        service.reload()
         assert service.packets() == original
-        changed = fixture()
-        changed["outputs"][0]["mapping"]["fields"][0]["factor"] = 2
-        config.write_text(json.dumps(changed))
-        service.proc.send_signal(signal.SIGHUP)
-        deadline = time.monotonic() + 5
-        while time.monotonic() < deadline:
-            packets = service.packets()
-            if packets[0] != original[0]:
-                assert packets[1] == original[1]
-                break
-        else:
-            raise AssertionError("valid reload did not change translation")
+    finally:
+        service.close()
+    configure(binary, root, "--set", "outputs[0].mapping.fields[0].factor=2")
+    service = Service(binary, root)
+    try:
+        changed = service.packets()
+        assert changed[0] != original[0] and changed[1] == original[1]
     finally:
         service.close()
 
@@ -321,6 +681,12 @@ def editing(binary, root):
             "revision": initial["draft_revision"], "workspace": draft})
         assert not invalid["valid"]
         assert invalid["active_revision"] == initial["active_revision"]
+        assert service.packets() == original
+        before_reload = saved_files(root)
+        service.reload()
+        assert saved_files(root) == before_reload
+        assert service.state()["draft_revision"] == invalid["draft_revision"]
+        assert not service.state()["valid"], "reload discarded the invalid draft"
         assert service.packets() == original
         try:
             service.request("POST", "/api/state", {
@@ -385,7 +751,7 @@ def editing(binary, root):
         state = service.request("POST", "/api/state", {
             "revision": service.state()["draft_revision"],
             "workspace": broken})
-        assert not state["valid"], "invalid service endpoint activated"
+        assert not state["valid"], "runtime options activated in saved workspace"
         assert service.packets() == changed
         persistence_failures(service, root, changed)
     finally:
@@ -645,10 +1011,31 @@ def revisions(binary, root):
             (root / "draft.json").write_bytes(good)
             (root / (name + ".json")).write_bytes(content)
             before = {p: p.read_bytes() for p in root.glob("*.json")}
-            refused = subprocess.run([
-                binary, "run", "--workspace", str(root), "--config",
-                str(config)], capture_output=True, timeout=5)
-            assert refused.returncode == 2, (name, content)
+            if name == "draft" and content == damaged[-1]:
+                service = Service(binary, root, web=True)
+                try:
+                    state = service.state()
+                    assert state["draft_revision"] == 18446744073709551615
+                    assert state["draft"] == {} and not state["valid"]
+                    assert state["active_revision"] == json.loads(good)["revision"]
+                    assert all(service.packets()), "last active configuration lost"
+                    try:
+                        service.request("POST", "/api/state", {
+                            "revision": state["draft_revision"],
+                            "workspace": fixture()})
+                    except urllib.error.HTTPError as error:
+                        assert error.code == 500
+                    else:
+                        raise AssertionError("exhausted draft revision wrapped")
+                    assert service.state()["draft_revision"] == state["draft_revision"]
+                    assert service.state()["active_revision"] == state["active_revision"]
+                    assert all(p.read_bytes() == data
+                               for p, data in before.items())
+                finally:
+                    service.close()
+            else:
+                command(binary, "run", "--workspace", root, status=2)
+            configure(binary, root, "--config", config, status=2)
             assert all(p.read_bytes() == data for p, data in before.items())
 
 
@@ -846,6 +1233,9 @@ if __name__ == "__main__":
     with tempfile.TemporaryDirectory(prefix="cot-vmf-service-") as directory:
         root = Path(directory) / "workspace"
         {"monitor": monitor, "translation": translation,
+         "configuration": configuration,
+         "entrypoint-arguments": entrypoint_arguments,
+         "entrypoint": entrypoint_service,
          "editing": editing, "publication": publication,
          "persistence-size": persistence_size,
          "revisions": revisions, "authorities": authorities,

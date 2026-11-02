@@ -494,6 +494,22 @@ TEST(Core, EmbeddedSchemasAndMappingOwnTheirInput)
 	EXPECT_EQ(1u, activity.outputs_succeeded);
 }
 
+TEST(Core, RuntimeOptionsCannotBeStoredInWorkspace)
+{
+	for (const std::string &settings :
+	     {"{}", "{\"cot_listen\":\"0.0.0.0:9001\"}",
+	      "{\"vmf_target\":\"127.0.0.1:9002\"}",
+	      "{\"web_listen\":null}", "{\"log_format\":\"json\"}"}) {
+		std::string json = std::string(empty_workspace);
+		json.pop_back();
+		json += ",\"service\":" + settings + "}";
+		owner loaded;
+
+		EXPECT_EQ(CV_INVALID_CONFIG, loaded.load(json));
+		EXPECT_EQ(nullptr, loaded.value);
+	}
+}
+
 TEST(Core, OptionalSourceCannotLeakAcrossEvents)
 {
 	std::string definition =
