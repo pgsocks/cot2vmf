@@ -57,6 +57,36 @@ function receiveEvent() {
 
 test.beforeEach(async ({ request }) => { await reset(request); });
 
+test('Delete removes only the selected wire and preserves text editing',
+  async ({ page, request }) => {
+    await draft(request, [output('keyboard', { fields: [
+      { cot: 'send_time_ms', vmf: { index: '1.' }, factor: 123 },
+      { cot: 'detail.status.battery', vmf: { index: '2.' } },
+    ] })]);
+    await page.goto('/');
+    const wire = page.locator('path.wire').first();
+    await wire.focus(); await page.keyboard.press('Enter');
+    const factor = page.locator('#mapping-editor [data-property="factor"]');
+    await factor.focus(); await factor.press('Home');
+    await factor.press('Delete'); await factor.press('Tab');
+    await saved(page);
+    expect((await state(request)).draft.outputs[0].mapping.fields[0].factor)
+      .toBe(23);
+    await expect(page.locator('path.wire')).toHaveCount(2);
+    const search = page.locator('#source-search');
+    await search.fill('battery'); await search.press('Home');
+    await search.press('Delete'); await expect(search).toHaveValue('attery');
+    await search.fill('');
+    await wire.focus(); await page.keyboard.press('Enter');
+    await page.keyboard.press('Delete');
+    await saved(page);
+    await expect(page.locator('path.wire')).toHaveCount(1);
+    expect((await state(request)).draft.outputs[0].mapping.fields.map(x => x.cot))
+      .toEqual(['detail.status.battery']);
+    await page.reload();
+    await expect(page.locator('path.wire')).toHaveCount(1);
+  });
+
 function output(id, mapping = {}, enabled = false) {
   return { id, enabled, mapping: {
     format: 'cot-vmf-mapping-config/1', schema: 'repair',

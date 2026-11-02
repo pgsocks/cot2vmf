@@ -611,12 +611,20 @@ function drawWires() {
     if (a) path(a, {x: pointerPosition.x - rect.x, y: pointerPosition.y - rect.y}, "drag-wire");
   }
 }
+function removeSelectedConnection() {
+  const wire = wireRecords().find(item => item.id === selectedWire);
+  if (!wire) return false;
+  wire.output.mapping.fields.splice(wire.index, 1);
+  selectedWire = null;
+  changed(); renderMapping(); renderMappingEditor();
+  return true;
+}
 function renderMappingEditor() {
   const target = $("mapping-editor"); target.replaceChildren();
   const wire = wireRecords().find(item => item.id === selectedWire);
   if (wire) {
     $("mapping-inspector-title").textContent = "Connection properties";
-    target.append(el("div", "selected-target", wire.binding.cot + " → " + wire.field.index), editor(wire.binding, bindingSpec, next => { wire.output.mapping.fields[wire.index] = next; }, "", "wire/" + wire.id), button("Remove connection", () => { wire.output.mapping.fields.splice(wire.index, 1); selectedWire = null; changed(); renderMapping(); renderMappingEditor(); }, "button wide-button danger"));
+    target.append(el("div", "selected-target", wire.binding.cot + " → " + wire.field.index), editor(wire.binding, bindingSpec, next => { wire.output.mapping.fields[wire.index] = next; }, "", "wire/" + wire.id), button("Remove connection", removeSelectedConnection, "button wide-button danger"));
     return;
   }
   const output = workspace.outputs.find(item => item.id === selectedOutput);
@@ -696,6 +704,13 @@ window.addEventListener("resize", scheduleWires);
 document.addEventListener("pointermove", event => { if (dragging) { pointerPosition = {x: event.clientX, y: event.clientY}; scheduleWires(); } });
 document.addEventListener("pointerup", () => { dragging = null; pointerPosition = null; scheduleWires(); });
 document.addEventListener("keydown", event => { if (event.key === "Escape") { armedSource = dragging = null; pointerPosition = null; renderMapping(); } });
+document.addEventListener("keydown", event => {
+  if (event.key !== "Delete" || event.defaultPrevented || event.isComposing
+      || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey
+      || $("mapping-page").hidden
+      || event.target.closest("input, textarea, select, [contenteditable]:not([contenteditable='false'])")) return;
+  if (removeSelectedConnection()) event.preventDefault();
+});
 $("add-schema").addEventListener("click", () => {
   const schema = {id: uid("schema"), document: {format: "vmf-schema/1", envelope: "C", messages: []}};
   workspace.schemas.push(schema); selectedSchema = schema.id; selectedMessage = selectedIndex = null; changed(); render();
