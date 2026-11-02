@@ -1229,3 +1229,62 @@ test('CoT purpose help covers every source without arming connections', async ({
   await page.locator('.source-port[data-source-path="point.latitude"]').hover();
   await expect(tooltip).toBeHidden();
 });
+
+test('output controls explain exact identity and conversion semantics', async ({ page, request }) => {
+  await draft(request, [output('help-output', { fields: [
+    { cot: 'send_time_ms', vmf: { key: 'sent' }, factor: 1 },
+  ] })]);
+  await page.goto('/');
+  await page.locator('#output-list [data-output-id="help-output"]').click();
+  const schemaHelp = page.locator('#mapping-editor').getByRole('button', {
+    name: 'Help for schema', exact: true,
+  });
+  await schemaHelp.click();
+  await expect(page.getByRole('tooltip')).toContainText('workspace schema ID');
+  await page.keyboard.press('Escape');
+  await page.locator('path.wire').focus();
+  await page.keyboard.press('Enter');
+  await page.locator('#mapping-editor').getByRole('button', {
+    name: 'Help for factor', exact: true,
+  }).click();
+  await expect(page.getByRole('tooltip')).toContainText('cot_value = physical_vmf');
+  await expect(page.locator('#mapping-editor [data-property="factor"]')).toHaveValue('1');
+  expect((await state(request)).draft.outputs[0].mapping.fields[0].factor).toBe(1);
+});
+
+test('guided controls retain contextual help across form navigation',
+  async ({ page, request }) => {
+    await payloadDraft(request);
+    await page.goto('/'); await payloadDefinition(page);
+    await page.locator('.tree-select.field').first().click();
+    const authoring = page.getByRole('button', {
+      name: 'Help for Payload authoring', exact: true,
+    });
+    await expect(authoring).toHaveCount(1);
+    const revision = (await state(request)).draft_revision;
+    await payloadStep(page, '2. Encoding');
+    const help = page.getByRole('button', {
+      name: 'Help for encode_type', exact: true,
+    });
+    await help.focus();
+    await expect(page.getByRole('tooltip')).toContainText('kind of value');
+    await page.keyboard.press('Escape');
+    await expect(help).toBeFocused();
+    await expect(page.getByRole('tooltip')).toBeHidden();
+    await expect(authoring).toHaveCount(1);
+    expect((await state(request)).draft_revision).toBe(revision);
+  });
+
+test('repair-form help distinguishes workspace and mapping formats',
+  async ({ page, request }) => {
+    const current = await state(request);
+    expect((await request.post('/api/state', { data: {
+      revision: current.draft_revision, workspace: { ...empty, outputs: null },
+    } })).ok()).toBeTruthy();
+    await page.goto('/');
+    await page.locator('#workspace-editor').getByRole('button', {
+      name: 'Help for format', exact: true,
+    }).click();
+    await expect(page.getByRole('tooltip')).toContainText('cot-vmf-workspace/1');
+    expect((await state(request)).draft.outputs).toBeNull();
+  });

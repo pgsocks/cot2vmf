@@ -242,6 +242,181 @@ const cotFieldHelp = {
   "detail.extensions": "Opaque registered extension entries retained by the native CoT decoder. Their presence can be observed, but they cannot be connected directly to a VMF field.",
 };
 
+const schemaPropertyHelp = {
+  format: "The native document format identifier. Payload definitions use vmf-schema/1.",
+  envelope: "The VMF envelope profile. This choice determines which standard versions and header properties are valid.",
+  message_standard: "A named standard edition. It is an alternative to a raw standard_version at this level; a message-level selection replaces the schema-level selection.",
+  standard_version: "An exact raw standard-version code, or absent where the profile permits it. It is an alternative to message_standard, not an automatic latest-version choice.",
+  message_number: "The VMF K-series message number, such as K01.1. Standard-version and subtype presence also participate in the exact message identity.",
+  messages: "The message definitions supplied by this schema. The application does not supply assigned operational layouts.",
+  subtype: "The optional exact message subtype. Present zero and an absent subtype are different identities.",
+  indexes: "Fields and structural indicators in wire order. Array order determines encoding order; index numbers do not sort the definitions.",
+  index_number: "The field's numeric index address, such as 3.1. Numeric addresses with and without a trailing dot identify the same index.",
+  number_of_bits: "The fixed wire width, or the finite capacity for a variable field. Width alone does not enable text or variable-length encoding.",
+  key: "An optional application binding key, unique within this message, which a mapping can use instead of the numeric index.",
+  encode_type: "The kind of value encoded by the field. This choice determines which representation, text, length and scale properties apply.",
+  indicator: "A structural control: FPI controls one field's presence, GPI a group's presence, and FRI/GRI a repeated field or group. Indicators are one bit and are not ordinary mapping targets.",
+  target: "The field index controlled by FPI, or group ID controlled by GPI. The indicator must immediately precede its target in the logical sequence.",
+  group_code: "The field's group membership path, such as G1/G2. Group membership adds no wire bits by itself.",
+  repeat_code: "The repeat membership path, such as R1/R2. An FRI or GRI controller also declares a finite maximum, for example R1(4).",
+  representation: "The integer bit representation. Signed fields need an explicit compatible signed representation.",
+  bit_order: "The logical significance of bits within the field. This is independent of the message's physical octet packing.",
+  octet_order: "The message's physical octet packing order, independent of individual field bit significance. Overrides do not add alignment padding.",
+  text_encoding: "The encoding of text on the wire. Text capacity must be divisible by the encoding's seven- or eight-bit code-unit width.",
+  length_from: "An earlier scalar field that supplies this field's length in wire units. The reference must be available in the same or an enclosing scope.",
+  length_bias: "A checked signed adjustment to the length read from length_from. This property applies only when length_from is selected.",
+  when: "A condition over preceding scalar raw codes that determines whether this field is active.",
+  mode: "Require all condition terms to match, or at least one term to match.",
+  negate: "Invert this condition or condition term's result.",
+  terms: "The nonempty collection of raw-code tests that make up this condition.",
+  field: "The earlier scalar index tested by this condition term. Future or unavailable fields cannot supply its value.",
+  values: "Inclusive raw-code intervals that satisfy this condition term.",
+  mask: "An optional raw-bit mask applied for this condition term. Omitting it uses all raw bits.",
+  allowed: "Disjoint inclusive intervals of permitted raw wire codes. These remain raw-code constraints for signed and scaled fields.",
+  first: "The first included raw code in this interval.",
+  last: "The last included raw code in this interval.",
+  constant: "A required raw scalar code. This constrains a supplied value; it does not automatically supply a value to an output.",
+  scale: "Exact rational factor and bias describing physical_value = raw_code × factor + bias. Scaled fields require this metadata.",
+  factor: "The exact rational multiplier used by this field's scale.",
+  bias: "The exact rational offset used by this field's scale, or the checked signed adjustment to a scalar repeat count.",
+  numerator: "The signed numerator of this exact rational value.",
+  denominator: "The unsigned, nonzero denominator of this exact rational value.",
+  sentinels: "Raw codes reserved as scale sentinel values, rather than ordinary physical measurements.",
+  repeats: "Message-level declarations for fixed or preceding-scalar repeats. A repeat cannot also have an FRI/GRI controller.",
+  count: "The fixed number of occurrences. Zero is valid for a fixed repeat.",
+  count_from: "An earlier scalar field that supplies the occurrence count. Its value is supplied normally and is not backpatched by the encoder.",
+  maximum: "The finite maximum permitted occurrence count for this repeat.",
+  minimum: "The minimum permitted count for a scalar-count repeat.",
+};
+
+const mappingPropertyHelp = {
+  format: "The native mapping format identifier. Outputs use cot-vmf-mapping-config/1.",
+  name: "An optional human-readable name for this output mapping.",
+  schema: "The workspace schema ID containing this output's message definition. It is not a filesystem path.",
+  cot: "The canonical CoT source path. Only standard individually mappable catalog fields can supply a connection.",
+  vmf: "The target VMF field, selected by a unique key or a numeric index within this output's exact message.",
+  key: "The unique application key of the target field. Select either key or index for a target reference.",
+  index: "The target's numeric field address, such as 3.1, or the zero-based occurrence index inside an occurrence selector.",
+  factor: "Numeric conversion uses cot_value = physical_vmf × factor + offset. The default factor is 1; encoding inverts the conversion.",
+  offset: "Numeric conversion uses cot_value = physical_vmf × factor + offset. The default offset is 0.",
+  values: "An explicit table from logical CoT values to raw unsigned VMF codes. Unmatched numeric sources use numeric conversion; unmatched text fails.",
+  encoding: "Binary values supplied as text require hexadecimal encoding. The schema still determines their wire width and length.",
+  bit_count: "An explicit significant bit count for a binary bit value. Unused high bits must be zero.",
+  occurrences: "Select every enclosing repeat occurrence, outermost first. Occurrence indices are zero-based.",
+  repeat: "The enclosing repeat ID identified by this occurrence selector or repeat-count assertion.",
+  value: "An explicit VMF constant. Signed fields take logical signed integers; unsigned, enum and scaled fields take raw unsigned codes.",
+  fields: "Connections from canonical CoT fields to VMF target occurrences. Each target occurrence has one writer.",
+  vmf_constants: "Explicit values supplied directly to VMF fields. A constant and a connection cannot write the same target occurrence.",
+  presence: "Explicit presence assertions for GPI-controlled groups. Without an assertion, the native encoder may infer presence from supplied descendants.",
+  group: "The GPI-controlled group ID whose presence is being asserted.",
+  present: "Whether the selected GPI-controlled group is present in the encoded message.",
+  repeat_counts: "Explicit counts for FRI/GRI-controlled repeats. Fixed and preceding-scalar repeats remain governed by their schema.",
+  count: "The explicitly asserted number of occurrences of an FRI/GRI-controlled repeat.",
+  vmf_header: "The native VMF envelope header. Its exact message identity chooses the payload definition; absent version or subtype values are not wildcards.",
+  id: "The exact native VMF message identity. This must match a message in the selected schema.",
+  user_message_format: "The native user-message-format code. Payload schema definitions in this application select VMF format 2.",
+  standard_version: "The exact raw standard-version code in the message identity. Present zero differs from an absent version.",
+  identification: "The functional area, message number and optional subtype identifying this VMF message.",
+  functional_area: "The functional-area number in the exact VMF message identity.",
+  message_number: "The message number within its functional area. It must match the selected schema identity.",
+  subtype: "The optional exact message subtype. Present zero differs from an absent subtype.",
+  shortened: "Select the profile's shortened-header form. Native header rules determine its required and permitted fields.",
+  compression: "The native header compression code. Message compression is unsupported by this translator.",
+  originator: "The originating address. Supply exactly one native URN or name for a present address.",
+  recipients: "The recipient addresses carried by the VMF header.",
+  information_addressees: "Additional information addressees carried by the VMF header.",
+  urn: "The numeric native address identifier. A present address uses either URN or name.",
+  file_name: "The optional native message filename, subject to the identity-specific header rules.",
+  header_size_octets: "The header-size field in octets. Complete-PDU authoring derives encoded lengths.",
+  message_size_octets: "The message-size field in octets. Complete-PDU authoring derives encoded lengths.",
+  operation: "The native message operation code.",
+  retransmit: "Whether the native header marks this message as a retransmission.",
+  precedence: "The native message precedence code; defaults depend on the envelope profile.",
+  classification: "The native message classification code.",
+  originator_dtg: "The message's originator date-time group.",
+  perishability: "The message's native perishability date-time group.",
+  acknowledgment: "The requested acknowledgment flags. Acknowledgment requests cannot coexist with response-only metadata.",
+  machine: "Request a machine acknowledgment.",
+  operator_ack: "Request an operator acknowledgment.",
+  operator_reply: "Request an operator reply.",
+  response: "Response-only metadata, including its required receipt-compliance code.",
+  acknowledged: "The date-time group of the message being acknowledged.",
+  receipt_compliance: "The required native receipt-compliance response code.",
+  cantco_reason: "The native reason code for inability to comply, when applicable to the response.",
+  cantpro_reason: "The native reason code for inability to process, when applicable to the response.",
+  amplification: "Optional response amplification text.",
+  references: "References to other messages, each identifying its originator and date-time group.",
+  dtg: "The native date-time group associated with this reference.",
+  year: "The year component of this native date-time group.",
+  month: "The month component of this native date-time group.",
+  day: "The day component of this native date-time group.",
+  hour: "The hour component of this native date-time group.",
+  minute: "The minute component of this native date-time group.",
+  second: "The second component of this native date-time group.",
+  extension: "The optional native date-time extension code.",
+  marking_b: "The security marking field available with envelope B.",
+  marking_c: "The security marking text available with envelope C.",
+  markings: "The security marking codes available with envelopes D and D1.",
+};
+
+function propertyHelp(key, path = "") {
+  if (path.startsWith("schema/")
+      || /^workspace\/schemas\/\d+\/document(?:\/|$)/.test(path)) return schemaPropertyHelp[key];
+  if (path === "workspace") return {
+    format: "The workspace format identifier: cot-vmf-workspace/1.",
+    schemas: "The workspace's library of user-supplied native payload definitions.",
+    outputs: "The independently enabled output mappings stored in this workspace.",
+  }[key];
+  if (/^workspace\/schemas\/\d+$/.test(path)) return {
+    id: "The unique workspace schema ID used by output mappings.",
+    document: "The native vmf-schema/1 payload definition for this schema.",
+  }[key];
+  if (/^workspace\/outputs\/\d+$/.test(path)) return {
+    id: "The unique workspace identifier of this output.",
+    enabled: "Attempt this output for incoming CoT events when enabled.",
+    mapping: "The output's schema reference, exact header identity, and field mappings.",
+  }[key];
+  if (path.startsWith("workspace/")
+      && !/^workspace\/outputs\/\d+\/mapping(?:\/|$)/.test(path)) return undefined;
+  if (key === "fields" && path.includes("vmf_header"))
+    return "The native envelope header fields, including its addresses and exact message identity.";
+  if (key === "messages" && path.includes("vmf_header"))
+    return "Native message header descriptors. An output selects exactly one payload message identity.";
+  if (key === "name" && /\/(originator|recipients|information_addressees)(\/|$)/.test(path))
+    return "The text form of a native address. A present address uses either name or URN.";
+  if (key === "index" && path.includes("occurrences"))
+    return "The zero-based occurrence index within the selected enclosing repeat.";
+  if (key === "vmf" && path.includes("values"))
+    return "The raw unsigned VMF code supplied when this table entry's CoT value matches.";
+  if (key === "cot" && path.includes("values"))
+    return "The logical CoT scalar matched by this value-table entry. Each source value must be unique in the table.";
+  return mappingPropertyHelp[key];
+}
+
+function attachStaticHelp() {
+  const items = [
+    [".source-column .column-title h2", "CoT sources", "Canonical CoT fields appear here. Connect only the data your VMF message needs. A dashed pending wire follows the pointer until you choose a target or press Escape."],
+    [".target-column .column-title h2", "VMF payloads", "Targets come from your valid native schema definitions. Structural indicators are controlled by presence and repeat settings rather than ordinary connections."],
+    [".outputs-panel h2", "Outputs", "Each enabled output is attempted for every incoming CoT event. Turning Send off retains its mapping without attempting transmission."],
+    [".test-results h2", "Last test result", "The most recent attempt for each output. When the edited draft is invalid, results describe the previous active configuration; the revision shown identifies the tested version."],
+    [".session-totals summary", "Session totals", "Cumulative service counters include earlier authoring attempts. Use an output's last test result to assess its current mapping."],
+    ["#schema-inspector-title", "Payload authoring", "Choose the fields that determine validity first, then complete the applicable settings in later steps. Back revisits earlier choices; Undo restores the previous payload edit."],
+  ];
+  for (const [selector, label, description] of items) {
+    const target = document.querySelector(selector);
+    if (!target) continue;
+    const sibling = target.id === "schema-inspector-title";
+    const existing = sibling
+      ? [...target.parentElement.children].some(child => child.dataset.staticHelp === label)
+      : target.querySelector(".help-button");
+    if (existing) continue;
+    const help = helpButton(label, description);
+    help.dataset.staticHelp = label;
+    if (sibling) target.after(help);
+    else target.append(help);
+  }
+}
+
 const text = {kind: "text"}, integer = {kind: "integer"}, number = {kind: "number"}, boolean = {kind: "boolean"}, scalar = {kind: "scalar"};
 const enumeration = (...values) => ({kind: "enum", values});
 const object = (properties, required = []) => ({kind: "object", properties, required});
@@ -383,7 +558,10 @@ function editor(value, spec, set, label = "", path = "") {
     for (const [key, current] of Object.entries(value)) {
       const row = el("div", "property"), name = el("div", "property-label");
       row.dataset.propertyName = key;
-      name.append(el("code", "", key), button("×", () => { delete value[key]; changed(); renderEditors(); }, "remove-property"));
+      name.append(el("code", "", key));
+      const description = propertyHelp(key, path);
+      if (description) name.append(helpButton(key, description));
+      name.append(button("×", () => { delete value[key]; changed(); renderEditors(); }, "remove-property"));
       row.append(name);
       const childSpec = spec.properties[key] || infer(current);
       const nested = current !== null && typeof current === "object";
@@ -634,7 +812,8 @@ function guidedCheckInteger(key, next, owner, context) {
 function guidedField(owner, key, spec, path, context = {}, options = {}) {
   const row = el("div", "property guided-property"); row.dataset.propertyName = key;
   const name = el("div", "property-label"); name.append(el("label", "", guidedLabel(key)));
-  if (options.help) name.append(guidedHelp(key, options.help));
+  const description = options.help || propertyHelp(key, path);
+  if (description) name.append(guidedHelp(key, description));
   if (!options.required && guidedOwn(owner, key)) name.append(button("Remove " + guidedLabel(key), () => {
     guidedController("remove " + guidedLabel(key), removed => { delete owner[key]; if (context.field === owner && guidedControllerKeys.includes(key)) guidedPruneField(owner, removed); });
   }, "remove-property"));
@@ -756,7 +935,9 @@ function guidedStandard(target, owner, path, envelope, isMessage) {
   if (names.length) { select.add(new Option("Named edition", "edition")); select.add(new Option("Raw version code", "raw")); }
   if (![...select.options].some(option => option.value === mode)) select.add(new Option("Saved selection needs repair", mode));
   select.value = mode;
-  row.append(el("label", "property-label", "Standard selection"), select); target.append(row);
+  const label = el("label", "property-label", "Standard selection");
+  label.append(helpButton("standard selection", "Choose inheritance, an absent version where permitted, a named edition, or a raw version code. Named and raw selections replace each other; message overrides replace the schema selection as a unit."));
+  row.append(label, select); target.append(row);
   select.addEventListener("change", () => schemaChange("change standard selection", () => {
     delete owner.message_standard; delete owner.standard_version;
     if (select.value === "edition") owner.message_standard = names[0];
@@ -898,7 +1079,10 @@ function guidedRepeat(value, path, context) {
       select.addEventListener("change", () => guidedController("change repeat count mechanism", removed => {
         if (select.value === "fixed") { guidedRemove(value, ["count_from", "maximum", "minimum", "bias"], removed); value.count = 0; }
         else { guidedRemove(value, ["count"], removed); value.count_from = ""; value.maximum = 0; }
-      })); target.append(el("label", "property-label", "Count mechanism"), select);
+      }));
+      const label = el("label", "property-label", "Count mechanism");
+      label.append(helpButton("repeat count mechanism", "Use a fixed count, including zero, or read the count from an earlier scalar with explicit bounds. A declaration cannot also use an FRI or GRI controller."));
+      target.append(label, select);
     }},
     {title: fixed ? "Fixed count" : "Source & bounds", render: target => guidedFields(target, value, repeatSpec, fixed ? ["count"] : ["count_from", "maximum", "minimum", "bias"], path, context, fixed ? ["count"] : ["count_from", "maximum"])}
   ]));
@@ -939,7 +1123,10 @@ function guidedConditionTerms(value, path, context) {
 }
 function renderSchemaEditor() {
   const target = $("schema-editor"), definition = selectedDefinition(); target.replaceChildren();
-  const undo = button("Undo", undoSchemaChange, "button small schema-undo"); undo.id = "schema-undo"; target.append(undo); updateSchemaUndo();
+  const undo = button("Undo", undoSchemaChange, "button small schema-undo"); undo.id = "schema-undo";
+  const history = el("div", "schema-history");
+  history.append(undo, helpButton("schema Undo", "Restore the previous schema edit from this browser session. Unrelated Mapping edits are retained. Restoring a deleted schema restores its removed outputs; undoing schema creation removes outputs that depend on it. Reloading clears this history."));
+  target.append(history); updateSchemaUndo();
   if (schemaExplanation) target.append(el("p", "guided-explanation", schemaExplanation));
   if (!definition) { $("schema-inspector-title").textContent = "Select a definition"; guidedNote(target, "Choose or create a schema. Undo restores schema edits from this editing session."); return; }
   let current = definition, spec = schemaSpec, title = "Schema properties", context = {};
@@ -1485,6 +1672,7 @@ $("reload").addEventListener("click", async () => {
   if (saving) return;
   try { clearTimeout(saveTimer); state = await request("/api/state"); workspace = state.draft; resetSchemaHistory(); generation = savedGeneration = 0; selectedWire = selectedOutput = null; message(""); status(); render(); } catch (error) { message(error.message, true); }
 });
+attachStaticHelp();
 document.querySelector(".mapping-toolbar strong").after(helpButton(
   "Translation map",
   "Drag a CoT source to a VMF target, or click a source and then a target. The dashed wire follows your pointer while a connection is pending. Escape cancels pending connections and clears wire selection. Select a wire to edit its conversion or press Delete to remove it."
