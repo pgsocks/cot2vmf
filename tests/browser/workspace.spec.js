@@ -144,6 +144,37 @@ async function draft(request, outputs) {
   expect(response.ok()).toBeTruthy();
 }
 
+test('Escape deselects a wire without changing mappings or unrelated input',
+  async ({ page, request }) => {
+    await draft(request, [output('escape', { fields: [
+      { cot: 'send_time_ms', vmf: { index: '1.' } },
+    ] })]);
+    await page.goto('/');
+    const wire = page.locator('path.wire');
+    await wire.focus(); await page.keyboard.press('Enter');
+    await expect(wire).toHaveClass(/selected/);
+    await expect(page.locator('#mapping-inspector-title'))
+      .toHaveText('Connection properties');
+    const revision = (await state(request)).draft_revision;
+    const search = page.locator('#source-search');
+    await search.fill('send_time'); await search.press('Escape');
+    await expect(search).toHaveValue('send_time');
+    await expect(search).toBeFocused();
+    await expect(wire).not.toHaveClass(/selected/);
+    await expect(wire).toHaveAttribute('aria-pressed', 'false');
+    await expect(page.locator('#mapping-inspector-title'))
+      .toHaveText('Make a connection');
+    expect((await state(request)).draft_revision).toBe(revision);
+    await expect(wire).toHaveCount(1);
+    const source = page.locator('.source-port[data-source-path="send_time_ms"]');
+    const box = await source.boundingBox();
+    await page.mouse.move(box.x + box.width - 12, box.y + box.height / 2);
+    await page.mouse.down(); await page.keyboard.press('Escape');
+    await page.mouse.up();
+    await expect(page.locator('path.drag-wire')).toHaveCount(0);
+    await expect(source).toHaveAttribute('aria-pressed', 'false');
+  });
+
 async function expandMapping(page) {
   const summaries = page.locator('#mapping-editor details:not([open]) > summary');
   while (await summaries.count()) await summaries.first().click();

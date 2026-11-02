@@ -510,6 +510,7 @@ function updatePendingConnection() {
   scheduleWires();
 }
 function cancelPendingConnection() {
+  if (pointerGesture) suppressPointerClick = true;
   armedSource = dragging = pointerGesture = pointerPosition = null;
   updatePendingConnection();
 }
@@ -648,6 +649,7 @@ function drawWires() {
     const node = path(a, b, "wire" + (selectedWire === wire.id ? " selected" : "") + (live ? " live" : "") + (wireHasDiagnostic(wire) ? " diagnostic-wire" : ""), previous); node.dataset.wireId = wire.id;
     node.setAttribute("visibility", visible(source) && visible(target) ? "visible" : "hidden");
     node.setAttribute("role", "button"); node.setAttribute("tabindex", "0"); node.setAttribute("aria-label", wire.binding.cot + " to " + wire.field.index);
+    node.setAttribute("aria-pressed", String(selectedWire === wire.id));
     if (!previous) {
       const select = () => { cancelPendingConnection(); selectedWire = node.dataset.wireId; selectedOutput = null; renderOutputs(); renderMappingEditor(); scheduleWires(); };
       node.addEventListener("click", select); node.addEventListener("keydown", event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); select(); } });
@@ -780,7 +782,15 @@ document.addEventListener("pointercancel", () => {
   if (!armedSource) pointerPosition = null;
   updatePendingConnection();
 });
-document.addEventListener("keydown", event => { if (event.key === "Escape") cancelPendingConnection(); });
+document.addEventListener("keydown", event => {
+  if (event.key !== "Escape") return;
+  if (armedSource || dragging || selectedWire) event.preventDefault();
+  cancelPendingConnection();
+  if (selectedWire) {
+    selectedWire = null;
+    renderOutputs(); renderMappingEditor(); scheduleWires();
+  }
+});
 document.addEventListener("keydown", event => {
   if (event.key !== "Delete" || event.defaultPrevented || event.isComposing
       || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey
