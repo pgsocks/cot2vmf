@@ -37,7 +37,7 @@
           <p id="stimulation-status">Waiting for CoT. Start real or synthetic traffic through TAK Gateway.</p>
         </section>
         <details class="session-totals"><summary>Session totals · since service startup</summary><div class="metrics"><div><span class="metric-label">COT RECEIVED</span><strong id="received-count">0</strong></div><div><span class="metric-label">DECODED</span><strong id="decoded-count">0</strong></div><div><span class="metric-label">VMF SENT</span><strong id="sent-count">0</strong></div><div><span class="metric-label">UNSUCCESSFUL OUTPUT ATTEMPTS</span><strong id="failed-count">0</strong></div><div class="metric-note">Cumulative counts include earlier authoring attempts.<br><small>Use the last test result for each output below.</small></div></div></details>
-        <div class="mapping-toolbar"><div><strong>Translation map</strong><span class="muted">Drag a source port to a target, or select each port.</span></div><div class="legend"><span class="legend-wire"></span> Mapping <span class="legend-wire active"></span> Source observed recently</div></div>
+        <div class="mapping-toolbar"><div><strong>Translation map</strong><span id="connection-instructions" class="muted" role="status">Drag a source port to a target, or click a source then a target.</span></div><div class="legend"><span class="legend-wire"></span> Mapping <span class="legend-wire active"></span> Source observed recently</div></div>
         <div class="mapping-layout">
           <div id="mapping-scroll" class="mapping-scroll">
             <div id="mapping-canvas" class="mapping-canvas">

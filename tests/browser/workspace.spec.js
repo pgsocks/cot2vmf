@@ -64,7 +64,7 @@ test('Delete removes only the selected wire and preserves text editing',
       { cot: 'detail.status.battery', vmf: { index: '2.' } },
     ] })]);
     await page.goto('/');
-    const wire = page.locator('path.wire').first();
+    const wire = page.getByRole('button', { name: 'send_time_ms to 1', exact: true });
     await wire.focus(); await page.keyboard.press('Enter');
     const factor = page.locator('#mapping-editor [data-property="factor"]');
     await factor.focus(); await factor.press('Home');
@@ -96,6 +96,43 @@ function output(id, mapping = {}, enabled = false) {
     } }] } }, fields: [], ...mapping,
   } };
 }
+
+test('clicked sources carry a preview wire until connected or cancelled',
+  async ({ page, request }) => {
+    await draft(request, []);
+    await page.goto('/');
+    const source = page.locator('.source-port[data-source-path="send_time_ms"]');
+    const target = page.locator('.target-port[data-target-index="1"]');
+    await source.click();
+    const preview = page.locator('path.drag-wire');
+    await expect(preview).toHaveCount(1);
+    await expect(source).toHaveAttribute('aria-pressed', 'true');
+    const initialPath = await preview.getAttribute('d');
+    await page.mouse.move(650, 500);
+    await expect.poll(() => preview.getAttribute('d')).not.toBe(initialPath);
+    await target.focus(); await page.keyboard.press('Enter');
+    await saved(page);
+    await expect(preview).toHaveCount(0);
+    await expect(page.locator('path.wire')).toHaveCount(1);
+    await source.click(); await target.click();
+    await expect(page.locator('#toast')).toContainText('already has a value');
+    await expect(preview).toHaveCount(1);
+    await source.click();
+    await expect(preview).toHaveCount(0);
+    await source.focus(); await page.keyboard.press('Enter');
+    await expect(preview).toHaveCount(1);
+    await page.keyboard.press('Escape');
+    await expect(preview).toHaveCount(0);
+    const wire = page.locator('path.wire');
+    await wire.focus();
+    await page.evaluate(() => window.dispatchEvent(new Event('resize')));
+    await expect(wire).toBeFocused();
+    await source.click();
+    await page.locator('[data-tab="schemas"]').click();
+    await page.locator('[data-tab="mapping"]').click();
+    await expect(preview).toHaveCount(0);
+    expect((await state(request)).draft.outputs[0].mapping.fields).toHaveLength(1);
+  });
 
 async function draft(request, outputs) {
   const current = await state(request);

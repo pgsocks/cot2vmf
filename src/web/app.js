@@ -122,6 +122,7 @@ let state = {draft: {format: "cot-vmf-workspace/1", schemas: [], outputs: []}, c
 let workspace = state.draft, generation = 0, savedGeneration = 0, saving = false, saveTimer;
 let selectedSchema = null, selectedMessage = null, selectedIndex = null, selectedWire = null, selectedOutput = null;
 let armedSource = null, dragging = null, pointerPosition = null, activeFields = new Set(), liveTimer, wireFrame;
+let pointerGesture = null, suppressPointerClick = false;
 let latestActivity = null;
 const expandedProperties = new Set();
 const isObject = value => value !== null && typeof value === "object" && !Array.isArray(value);
@@ -497,22 +498,56 @@ function wireRecords() {
   });
   return records;
 }
-function selectSource(source) { armedSource = armedSource === source.path ? null : source.path; document.querySelectorAll(".source-port").forEach(node => node.classList.toggle("armed", node.dataset.sourcePath === armedSource)); }
+function updatePendingConnection() {
+  document.querySelectorAll(".source-port").forEach(node => {
+    const armed = node.dataset.sourcePath === armedSource;
+    node.classList.toggle("armed", armed);
+    node.setAttribute("aria-pressed", String(armed));
+  });
+  $("connection-instructions").textContent = armedSource
+    ? armedSource + " → Choose a VMF target. Escape cancels."
+    : "Drag a source port to a target, or click a source then a target.";
+  scheduleWires();
+}
+function cancelPendingConnection() {
+  armedSource = dragging = pointerGesture = pointerPosition = null;
+  updatePendingConnection();
+}
+function selectSource(source, event) {
+  armedSource = armedSource === source.path ? null : source.path;
+  if (armedSource) {
+    const dot = event.currentTarget.querySelector(".port-dot").getBoundingClientRect();
+    pointerPosition = event.detail ? {x: event.clientX, y: event.clientY}
+      : {x: dot.right + 45, y: dot.y + dot.height / 2};
+    selectedWire = selectedOutput = null;
+    renderOutputs(); renderMappingEditor();
+  } else pointerPosition = null;
+  updatePendingConnection();
+}
+function connectTarget(port) {
+  const schema = catalogSchema(port.dataset.schemaId);
+  const msg = schema?.messages.find(item => String(item.ordinal) === port.dataset.messageOrdinal);
+  const field = msg?.fields.find(item => item.index === port.dataset.targetIndex);
+  if (armedSource && field?.mappable) return connect(armedSource, schema.id, msg, field);
+  return false;
+}
 function connect(sourcePath, schemaId, msg, field) {
   const output = ensureOutput(schemaId, msg);
   if (["fields", "vmf_constants"].some(key => output.mapping[key] !== undefined && !Array.isArray(output.mapping[key]))) {
     selectOutput(output.id);
-    message("Repair the mapping collections in this output before adding connections.", true); return;
+    message("Repair the mapping collections in this output before adding connections.", true); return false;
   }
   const matches = binding => isObject(binding) && refMatches(binding.vmf, field) && (!Array.isArray(binding.occurrences) || !binding.occurrences.length);
   if ((output.mapping.fields || []).some(matches) || (output.mapping.vmf_constants || []).some(matches)) {
-    message("This target already has a value. Select its wire to edit it, or use occurrence selectors for repeated fields."); return;
+    message("This target already has a value. Select its wire to edit it, or use occurrence selectors for repeated fields."); return false;
   }
   const binding = {cot: sourcePath, vmf: mappingTarget(field)};
   if (field.repeats?.length) binding.occurrences = field.repeats.map(repeat => ({repeat: repeat.repeat, index: 0}));
   (output.mapping.fields ||= []).push(binding);
   selectedWire = output.id + ":" + (output.mapping.fields.length - 1); selectedOutput = null; armedSource = null;
+  cancelPendingConnection();
   message(""); changed(); renderMapping(); renderMappingEditor();
+  return true;
 }
 function renderOutputs() {
   const list = $("output-list"); list.replaceChildren();
@@ -537,13 +572,16 @@ function renderMapping() {
   for (const source of state.catalog?.cot || []) {
     if (filter && ![source.path, source.type, source.unit, source.group].join(" ").toLowerCase().includes(filter)) continue;
     if (source.group !== group) { group = source.group; sources.append(el("div", "source-group", group || "Event")); }
-    const port = button("", () => { if (source.mappable) selectSource(source); }, "source-port" + (activeFields.has(Number(source.id)) ? " live" : ""));
+    const port = button("", event => { if (source.mappable) selectSource(source, event); }, "source-port" + (activeFields.has(Number(source.id)) ? " live" : ""));
     port.dataset.sourceId = source.id; port.dataset.sourcePath = source.path; port.classList.toggle("armed", armedSource === source.path);
     const copy = el("span", "port-copy"); copy.append(el("span", "field-path", source.path), el("span", "field-meta", source.type + (source.unit && source.unit !== "none" ? " · " + source.unit : "") + (source.mappable ? "" : " · presence only")));
     port.append(copy, el("span", "port-dot"));
     port.addEventListener("pointerdown", event => {
       if (!source.mappable || event.button !== 0) return;
+      pointerGesture = {source: source.path, id: event.pointerId,
+        x: event.clientX, y: event.clientY, previous: armedSource, moved: false};
       dragging = source.path; pointerPosition = {x: event.clientX, y: event.clientY};
+      scheduleWires();
     });
     sources.append(port);
   }
@@ -569,19 +607,25 @@ function renderMapping() {
         port.dataset.mappable = field.mappable ? "true" : "false";
         const copy = el("span", "port-copy"); copy.append(el("span", "field-path", field.index + (field.key ? "  " + field.key : "")), el("span", "field-meta", field.bits + " bits · " + field.kind + (field.mappable ? "" : " · structural") + (field.repeats?.length ? " · repeated" : "")));
         port.append(el("span", "port-dot"), copy);
-        port.addEventListener("pointerup", event => {
-          if (dragging && field.mappable) { const source = dragging; dragging = null; pointerPosition = null; event.preventDefault(); connect(source, schema.id, msg, field); }
+        port.addEventListener("focus", () => {
+          if (!armedSource) return;
+          const dot = port.querySelector(".port-dot").getBoundingClientRect();
+          pointerPosition = {x: dot.x + dot.width / 2, y: dot.y + dot.height / 2};
+          scheduleWires();
         });
         box.append(port);
       }
       const tools = el("div", "output-tools"); tools.append(button("Header & controls", () => inspectMessage(schema.id, msg), "text-button")); box.append(tools); targets.append(box);
     }
   }
-  renderFeedback(); scheduleWires();
+  if (armedSource && ![...sources.querySelectorAll(".source-port")].some(node => node.dataset.sourcePath === armedSource)) cancelPendingConnection();
+  renderFeedback(); updatePendingConnection();
 }
 function scheduleWires() { if (!wireFrame) wireFrame = requestAnimationFrame(() => { wireFrame = null; drawWires(); }); }
 function drawWires() {
-  const canvas = $("mapping-canvas"), svg = $("wires"), rect = canvas.getBoundingClientRect(); svg.replaceChildren();
+  const canvas = $("mapping-canvas"), svg = $("wires"), rect = canvas.getBoundingClientRect();
+  const existing = new Map([...svg.querySelectorAll(".wire")].map(node => [node.dataset.wireId, node]));
+  svg.querySelector(".drag-wire")?.remove();
   svg.setAttribute("width", canvas.scrollWidth); svg.setAttribute("height", canvas.scrollHeight);
   const endpoint = node => { const dot = node?.querySelector(".port-dot")?.getBoundingClientRect(); return dot ? {x: dot.x + dot.width / 2 - rect.x, y: dot.y + dot.height / 2 - rect.y} : null; };
   const visible = node => {
@@ -589,9 +633,9 @@ function drawWires() {
     const item = node?.getBoundingClientRect();
     return bounds && item && item.bottom > bounds.top && item.top < bounds.bottom;
   };
-  function path(a, b, className) {
-    const node = document.createElementNS("http://www.w3.org/2000/svg", "path"), reach = Math.max(45, (b.x - a.x) * .5);
-    node.setAttribute("d", `M ${a.x},${a.y} C ${a.x + reach},${a.y} ${b.x - reach},${b.y} ${b.x},${b.y}`); node.setAttribute("class", className); svg.append(node); return node;
+  function path(a, b, className, previous) {
+    const node = previous || document.createElementNS("http://www.w3.org/2000/svg", "path"), reach = Math.max(45, (b.x - a.x) * .5);
+    node.setAttribute("d", `M ${a.x},${a.y} C ${a.x + reach},${a.y} ${b.x - reach},${b.y} ${b.x},${b.y}`); node.setAttribute("class", className); if (!previous) svg.append(node); return node;
   }
   for (const wire of wireRecords()) {
     const source = [...document.querySelectorAll(".source-port")].find(node => node.dataset.sourcePath === wire.binding.cot);
@@ -599,15 +643,20 @@ function drawWires() {
     const a = endpoint(source), b = endpoint(target);
     if (!a || !b) continue;
     const live = source.classList.contains("live");
-    const node = path(a, b, "wire" + (selectedWire === wire.id ? " selected" : "") + (live ? " live" : "") + (wireHasDiagnostic(wire) ? " diagnostic-wire" : "")); node.dataset.wireId = wire.id;
+    const previous = existing.get(wire.id);
+    existing.delete(wire.id);
+    const node = path(a, b, "wire" + (selectedWire === wire.id ? " selected" : "") + (live ? " live" : "") + (wireHasDiagnostic(wire) ? " diagnostic-wire" : ""), previous); node.dataset.wireId = wire.id;
     node.setAttribute("visibility", visible(source) && visible(target) ? "visible" : "hidden");
     node.setAttribute("role", "button"); node.setAttribute("tabindex", "0"); node.setAttribute("aria-label", wire.binding.cot + " to " + wire.field.index);
-    const select = () => { selectedWire = wire.id; selectedOutput = null; renderOutputs(); renderMappingEditor(); scheduleWires(); };
-    node.addEventListener("click", select); node.addEventListener("keydown", event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); select(); } });
+    if (!previous) {
+      const select = () => { cancelPendingConnection(); selectedWire = node.dataset.wireId; selectedOutput = null; renderOutputs(); renderMappingEditor(); scheduleWires(); };
+      node.addEventListener("click", select); node.addEventListener("keydown", event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); select(); } });
+    }
     if (live) target.classList.add("live");
   }
-  if (dragging && pointerPosition) {
-    const source = [...document.querySelectorAll(".source-port")].find(node => node.dataset.sourcePath === dragging), a = endpoint(source);
+  existing.forEach(node => node.remove());
+  if ((dragging || armedSource) && pointerPosition) {
+    const source = [...document.querySelectorAll(".source-port")].find(node => node.dataset.sourcePath === (dragging || armedSource)), a = endpoint(source);
     if (a) path(a, {x: pointerPosition.x - rect.x, y: pointerPosition.y - rect.y}, "drag-wire");
   }
 }
@@ -670,6 +719,7 @@ function render(preserveFocus = false) {
   if (!preserveFocus || !$("mapping-editor").contains(focus)) renderMappingEditor();
 }
 function tab(name) {
+  if (name !== "mapping") cancelPendingConnection();
   document.querySelectorAll("[data-tab]").forEach(node => node.classList.toggle("selected", node.dataset.tab === name));
   $("mapping-page").hidden = workspaceNeedsRepair() || name !== "mapping"; $("schemas-page").hidden = workspaceNeedsRepair() || name !== "schemas";
   $("page-title").textContent = name === "mapping" ? "Connect the fields." : "Define your payloads.";
@@ -701,9 +751,36 @@ $("mapping-scroll").addEventListener("scroll", scheduleWires);
 $("source-fields").addEventListener("scroll", scheduleWires);
 $("target-fields").addEventListener("scroll", scheduleWires);
 window.addEventListener("resize", scheduleWires);
-document.addEventListener("pointermove", event => { if (dragging) { pointerPosition = {x: event.clientX, y: event.clientY}; scheduleWires(); } });
-document.addEventListener("pointerup", () => { dragging = null; pointerPosition = null; scheduleWires(); });
-document.addEventListener("keydown", event => { if (event.key === "Escape") { armedSource = dragging = null; pointerPosition = null; renderMapping(); } });
+document.addEventListener("pointerdown", () => { suppressPointerClick = false; }, true);
+document.addEventListener("click", event => {
+  if (!suppressPointerClick || !event.detail) return;
+  suppressPointerClick = false; event.preventDefault(); event.stopImmediatePropagation();
+}, true);
+document.addEventListener("pointermove", event => {
+  if (pointerGesture && event.pointerId === pointerGesture.id
+      && Math.hypot(event.clientX - pointerGesture.x, event.clientY - pointerGesture.y) >= 4) pointerGesture.moved = true;
+  if (dragging || armedSource) { pointerPosition = {x: event.clientX, y: event.clientY}; scheduleWires(); }
+});
+document.addEventListener("pointerup", event => {
+  if (!pointerGesture || event.pointerId !== pointerGesture.id) return;
+  const gesture = pointerGesture;
+  pointerGesture = dragging = null;
+  if (gesture.moved) {
+    armedSource = gesture.source;
+    suppressPointerClick = true;
+    const port = document.elementFromPoint(event.clientX, event.clientY)?.closest(".target-port");
+    if (port) connectTarget(port);
+  }
+  if (!armedSource) pointerPosition = null;
+  updatePendingConnection();
+});
+document.addEventListener("pointercancel", () => {
+  if (pointerGesture) armedSource = pointerGesture.previous;
+  dragging = pointerGesture = null;
+  if (!armedSource) pointerPosition = null;
+  updatePendingConnection();
+});
+document.addEventListener("keydown", event => { if (event.key === "Escape") cancelPendingConnection(); });
 document.addEventListener("keydown", event => {
   if (event.key !== "Delete" || event.defaultPrevented || event.isComposing
       || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey
