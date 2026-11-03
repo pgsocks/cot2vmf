@@ -207,67 +207,110 @@ static bool fields(yyjson_mut_doc *doc, yyjson_mut_val *array,
 	return true;
 }
 
+static const char *standard_name(vmf_message_standard standard)
+{
+	static const char *const names[] = {
+		"MIL-STD-6017", "MIL-STD-6017A", "MIL-STD-6017B",
+		"MIL-STD-6017C", "MIL-STD-6017D", "MIL-STD-6017E",
+		"TIDP-TE-R2", "TIDP-TE-R3", "TIDP-TE-R4", "TIDP-TE-R5",
+		"TIDP-TE-R6", "TIDP-TE-R7", "TIDP-FTE-R6"
+	};
+	unsigned index = static_cast<unsigned>(standard);
+
+	return index < sizeof(names) / sizeof(names[0]) ? names[index] : "";
+}
+
+static bool profile_variant(yyjson_mut_doc *doc, yyjson_mut_val *profiles,
+	const vmf_schema_set *view, vmf_envelope_version profile,
+	const char *name)
+{
+	vmf_message_id identity = {};
+	auto limits = vmf_default_limits();
+	vmf_status status = vmf_schema_set_validate_for_profile(view, profile,
+		&limits, nullptr, nullptr);
+
+	if (status == VMF_OK)
+		status = vmf_schema_message_id_for_profile(view, view->messages,
+			profile, &identity);
+	auto options = vmf_header_json_default_options();
+	vmf_header_json_text *text = nullptr;
+
+	if (status == VMF_OK)
+		status = vmf_header_json_template(profile, &identity, 1,
+			&options, &text, nullptr);
+	if (status == VMF_OUT_OF_MEMORY)
+		return false;
+	yyjson_mut_val *item = yyjson_mut_obj(doc);
+
+	if (!item || !yyjson_mut_obj_add_val(doc, profiles, name, item) ||
+		!yyjson_mut_obj_add_bool(doc, item, "available",
+			status == VMF_OK) ||
+		!yyjson_mut_obj_add_str(doc, item, "diagnostic",
+			status == VMF_OK ? "" : vmf_status_string(status))) {
+		vmf_header_json_text_destroy(text);
+		return false;
+	}
+	if (status != VMF_OK)
+		return yyjson_mut_obj_add_null(doc, item, "identity") &&
+			yyjson_mut_obj_add_null(doc, item, "header");
+	yyjson_doc *parsed = yyjson_read(vmf_header_json_text_data(text),
+		vmf_header_json_text_size(text), 0);
+	yyjson_val *root = parsed ? yyjson_doc_get_root(parsed) : nullptr;
+	yyjson_val *headers = yyjson_obj_get(
+		yyjson_obj_get(root, "fields"), "messages");
+	yyjson_val *id = yyjson_obj_get(yyjson_arr_get(headers, 0), "id");
+	yyjson_mut_val *header = root ? yyjson_val_mut_copy(doc, root) : nullptr;
+	yyjson_mut_val *exact = id ? yyjson_val_mut_copy(doc, id) : nullptr;
+
+	yyjson_doc_free(parsed);
+	vmf_header_json_text_destroy(text);
+	return header && exact &&
+		yyjson_mut_obj_add_val(doc, item, "identity", exact) &&
+		yyjson_mut_obj_add_val(doc, item, "header", header);
+}
+
 static bool messages(yyjson_mut_doc *doc, yyjson_mut_val *array,
 		     const vmf_schema_set *schemas)
 {
+	static const char *const names[] = {"B", "C", "D", "D1"};
+
 	for (size_t i = 0; i < schemas->message_count; ++i) {
 		const vmf_message_schema *message = schemas->messages + i;
-		vmf_message_id identity = {};
+		vmf_schema_set view = bridge_message_view(schemas, i);
 		char label[160] = {}, number[32];
 
-		if (vmf_schema_message_id(schemas, message, &identity) !=
-		    VMF_OK)
-			return false;
 		std::snprintf(number, sizeof(number), "K%02u.%u",
-			      identity.functional_area,
-			      identity.message_number);
-		std::snprintf(label, sizeof(label), "%s; UMF %u", number,
-			      identity.user_message_format);
-		if (identity.standard_version.present)
-			append(label, sizeof(label), "; version %u",
-			       identity.standard_version.value);
+			message->message_number.functional_area,
+			message->message_number.number);
+		std::snprintf(label, sizeof(label), "%s; UMF 2", number);
+		if (view.standard.kind == VMF_STANDARD_EDITION)
+			append(label, sizeof(label), "; %s",
+				standard_name(view.standard.as.edition));
+		else if (view.standard.kind == VMF_STANDARD_RAW_CODE)
+			append(label, sizeof(label), "; raw version %u",
+				view.standard.as.raw_code);
 		else
 			append(label, sizeof(label), "; version absent");
-		if (identity.subtype.present)
+		if (message->subtype.present)
 			append(label, sizeof(label), "; subtype %u",
-			       identity.subtype.value);
-		auto options = vmf_header_json_default_options();
-		vmf_header_json_text *text = nullptr;
-		vmf_status status =
-			vmf_header_json_template(schemas->envelope, &identity,
-						 1, &options, &text, nullptr);
-
-		if (status != VMF_OK)
-			return false;
-		yyjson_doc *parsed =
-			yyjson_read(vmf_header_json_text_data(text),
-				    vmf_header_json_text_size(text), 0);
-		yyjson_val *root =
-			parsed ? yyjson_doc_get_root(parsed) : nullptr;
-		yyjson_val *headers = yyjson_obj_get(
-			yyjson_obj_get(root, "fields"), "messages");
-		yyjson_val *id =
-			yyjson_obj_get(yyjson_arr_get(headers, 0), "id");
-		yyjson_mut_val *header =
-			root ? yyjson_val_mut_copy(doc, root) : nullptr;
-		yyjson_mut_val *exact =
-			id ? yyjson_val_mut_copy(doc, id) : nullptr;
-
-		yyjson_doc_free(parsed);
-		vmf_header_json_text_destroy(text);
+				message->subtype.value);
 		yyjson_mut_val *item = yyjson_mut_arr_add_obj(doc, array);
 		yyjson_mut_val *targets = yyjson_mut_arr(doc);
+		yyjson_mut_val *profiles = yyjson_mut_obj(doc);
 
-		if (!item || !targets || !header || !exact ||
-		    !yyjson_mut_obj_add_uint(doc, item, "ordinal", i) ||
-		    !yyjson_mut_obj_add_strcpy(doc, item, "label", label) ||
-		    !yyjson_mut_obj_add_strcpy(doc, item, "message_number",
-					       number) ||
-		    !yyjson_mut_obj_add_val(doc, item, "identity", exact) ||
-		    !yyjson_mut_obj_add_val(doc, item, "header", header) ||
-		    !yyjson_mut_obj_add_val(doc, item, "fields", targets) ||
-		    !fields(doc, targets, schemas, message))
+		if (!item || !targets || !profiles ||
+			!yyjson_mut_obj_add_uint(doc, item, "ordinal", i) ||
+			!yyjson_mut_obj_add_strcpy(doc, item, "label", label) ||
+			!yyjson_mut_obj_add_strcpy(doc, item, "message_number",
+				number) ||
+			!yyjson_mut_obj_add_val(doc, item, "fields", targets) ||
+			!yyjson_mut_obj_add_val(doc, item, "profiles", profiles) ||
+			!fields(doc, targets, &view, message))
 			return false;
+		for (unsigned p = VMF_ENVELOPE_B; p <= VMF_ENVELOPE_D1; ++p)
+			if (!profile_variant(doc, profiles, &view,
+				static_cast<vmf_envelope_version>(p), names[p - 1]))
+				return false;
 	}
 	return true;
 }

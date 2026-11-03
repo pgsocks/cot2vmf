@@ -28,7 +28,8 @@ std::string event(const std::string &detail = "")
 std::string schema(const std::string &indexes,
 		   const std::string &properties = "")
 {
-	return "{\"format\":\"vmf-schema/1\",\"envelope\":\"C\","
+	return "{\"format\":\"vmf-schema/1\","
+	       "\"message_standard\":\"MIL-STD-6017B\","
 	       "\"messages\":[{\"message_number\":\"K01.1\",\"indexes\":[" +
 	       indexes + "]" + properties + "}]}";
 }
@@ -39,11 +40,8 @@ const char field[] = "{\"index_number\":\"1.\",\"key\":\"value\","
 std::string mapping(const std::string &fields, const std::string &extra = "")
 {
 	return "{\"format\":\"cot-vmf-mapping-config/1\",\"schema\":\"s\","
-	       "\"vmf_header\":{\"fields\":{\"messages\":[{\"id\":{"
-	       "\"user_message_format\":2,\"identification\":{"
-	       "\"functional_area\":1,\"message_number\":1}}}]}},"
-	       "\"fields\":[" +
-	       fields + "]" + extra + "}";
+	       "\"message\":0,\"envelope\":\"C\",\"fields\":[" + fields + "]" +
+	       extra + "}";
 }
 
 const char latitude[] = "{\"cot\":\"point.latitude\","
@@ -157,9 +155,12 @@ struct decoded {
 	std::vector<uint64_t> values;
 	std::vector<uint8_t> bytes;
 	std::string text;
+	vmf_message_id identity = {};
 };
 
-decoded decode(const std::string &definition, const packet &data)
+decoded decode(const std::string &definition, const packet &data,
+		 vmf_envelope_version profile = VMF_ENVELOPE_C,
+		 size_t ordinal = 0)
 {
 	auto loading = vmf_schema_json_default_options();
 	vmf_schema_json_document *document = nullptr;
@@ -168,8 +169,20 @@ decoded decode(const std::string &definition, const packet &data)
 	EXPECT_EQ(VMF_OK,
 		  vmf_schema_json_load(definition.data(), definition.size(),
 				       &loading, &document, nullptr));
-	auto options =
-		vmf_options_for_schemas(vmf_schema_json_schemas(document));
+	const auto *source = vmf_schema_json_schemas(document);
+
+	if (!source || ordinal >= source->message_count) {
+		ADD_FAILURE() << "decoder fixture message is unavailable";
+		vmf_schema_json_destroy(document);
+		return result;
+	}
+	vmf_schema_set selected = *source;
+	selected.messages = source->messages + ordinal;
+	selected.message_count = 1;
+	if (selected.messages->standard.kind != VMF_STANDARD_INHERIT)
+		selected.standard = selected.messages->standard;
+	auto options = vmf_options_for_schemas(&selected);
+	options.profile = profile;
 	vmf_decoder *decoder = nullptr;
 
 	EXPECT_EQ(VMF_OK, vmf_decoder_create(&options, &decoder, nullptr));
@@ -181,6 +194,8 @@ decoded decode(const std::string &definition, const packet &data)
 		vmf_event next = {};
 
 		status = vmf_decoder_next(decoder, &input, &next);
+		if (status == VMF_OK && next.kind == VMF_EVENT_MESSAGE_BEGIN)
+			result.identity = next.as.message.id;
 		if (status != VMF_OK || next.kind != VMF_EVENT_FIELD)
 			continue;
 		if (next.field_kind == VMF_FIELD_TEXT)
@@ -912,8 +927,12 @@ TEST(Core, CatalogProvidesExactHeaderAndCanonicalFields)
 	yyjson_val *entry = yyjson_arr_get(yyjson_obj_get(root, "schemas"), 0);
 	yyjson_val *message =
 		yyjson_arr_get(yyjson_obj_get(entry, "messages"), 0);
-	yyjson_val *header = yyjson_obj_get(message, "header");
-	yyjson_val *identity = yyjson_obj_get(message, "identity");
+	yyjson_val *profiles = yyjson_obj_get(message, "profiles");
+	yyjson_val *selected = yyjson_obj_get(profiles, "C");
+	yyjson_val *header = yyjson_obj_get(selected, "header");
+	yyjson_val *identity = yyjson_obj_get(selected, "identity");
+
+	EXPECT_TRUE(yyjson_get_bool(yyjson_obj_get(selected, "available")));
 	yyjson_val *headers =
 		yyjson_obj_get(yyjson_obj_get(header, "fields"), "messages");
 
@@ -1347,39 +1366,198 @@ TEST(Core, SentinelCodesRequireExplicitLookupAndZeroScaleIsChecked)
 				      output("zero", mapping(latitude)))));
 }
 
-TEST(Core, AllEnvelopeProfilesUseTheirExactSchemaIdentity)
+TEST(Core, OnePortableDefinitionServesAllFourOutputProfiles)
 {
-	for (const char *profile : {"B", "C", "D", "D1"}) {
-		std::string definition = replace(
-			schema(field), "\"envelope\":\"C\"",
-			"\"envelope\":\"" + std::string(profile) + "\"");
-		std::string config = mapping(latitude);
+	std::string definition = schema(field);
+	std::string outputs;
+	const vmf_envelope_version profiles[] = {VMF_ENVELOPE_B,
+		VMF_ENVELOPE_C, VMF_ENVELOPE_D, VMF_ENVELOPE_D1};
+	const char *names[] = {"B", "C", "D", "D1"};
 
-		if (profile[0] == 'D') {
-			definition =
-				replace(definition, "\"messages\":",
-					"\"standard_version\":0,\"messages\":");
-			config = replace(config, "\"user_message_format\":2",
-					 "\"user_message_format\":2,\"standard_"
-					 "version\":0");
-		}
-		config = replace(config, "\"fields\":{\"messages\":",
-				 "\"fields\":{\"originator\":{\"urn\":1234},"
-				 "\"recipients\":[{\"name\":\"SYNTHETIC\"}],"
-				 "\"messages\":");
+	for (size_t i = 0; i < 4; ++i) {
+		std::string config = replace(mapping(latitude),
+			"\"envelope\":\"C\"", "\"envelope\":\"" +
+			std::string(names[i]) + "\"");
+
+		if (i)
+			outputs += ",";
+		outputs += output(names[i], config);
+	}
+	owner loaded;
+
+	ASSERT_EQ(CV_OK, loaded.load(workspace(definition, outputs)))
+		<< loaded.error.message;
+	sink target;
+	cv_activity activity = {};
+
+	ASSERT_EQ(CV_OK, process(&loaded, event(), &target, &activity))
+		<< loaded.error.message;
+	ASSERT_EQ(4u, target.packets.size());
+	EXPECT_EQ(4u, activity.outputs_succeeded);
+	for (size_t i = 0; i < 4; ++i) {
+		EXPECT_EQ(names[i], target.packets[i].id);
+		ASSERT_FALSE(target.packets[i].bytes.empty());
+		EXPECT_EQ(profiles[i], target.packets[i].bytes[0] & 0xf);
+		auto decoded = decode(definition, target.packets[i], profiles[i]);
+
+		EXPECT_EQ((std::vector<uint64_t>{38}), decoded.values);
+		EXPECT_EQ(i != 0, decoded.identity.standard_version.present);
+		if (i)
+			EXPECT_EQ(i == 1 ? 8u : 7u,
+				decoded.identity.standard_version.value);
+	}
+}
+
+TEST(Core, MessageOrdinalsIsolateEditionsAndMaterializeSelectedDefaults)
+{
+	const std::string definition =
+		"{\"format\":\"vmf-schema/1\","
+		"\"message_standard\":\"TIDP-TE-R7\",\"messages\":["
+		"{\"message_number\":\"K01.1\","
+		"\"message_standard\":\"MIL-STD-6017B\",\"indexes\":[" +
+		std::string(field) + "]},{\"message_number\":\"K01.1\","
+		"\"message_standard\":\"MIL-STD-6017E\",\"indexes\":[" +
+		replace(field, "\"number_of_bits\":8", "\"number_of_bits\":16") +
+		"]}]}";
+	std::string first = mapping(latitude);
+	std::string d1 = replace(first, "\"envelope\":\"C\"",
+		"\"envelope\":\"D1\"");
+	std::string b0 = replace(first, "\"envelope\":\"C\"",
+		"\"envelope\":\"B\"");
+	std::string b1 = replace(b0, "\"message\":0", "\"message\":1");
+	owner loaded;
+
+	ASSERT_EQ(CV_OK, loaded.load(workspace(definition,
+		output("c", first) + "," + output("d1", d1) + "," +
+		output("b0", b0) + "," + output("b1", b1))))
+		<< loaded.error.message;
+	sink target;
+	cv_activity activity = {};
+
+	ASSERT_EQ(CV_OK, process(&loaded, event(), &target, &activity))
+		<< loaded.error.message;
+	ASSERT_EQ(4u, target.packets.size());
+	EXPECT_EQ((std::vector<uint64_t>{38}),
+		decode(definition, target.packets[0]).values);
+	EXPECT_EQ((std::vector<uint64_t>{38}),
+		decode(definition, target.packets[1], VMF_ENVELOPE_D1).values);
+	EXPECT_EQ((std::vector<uint64_t>{38}),
+		decode(definition, target.packets[2], VMF_ENVELOPE_B).values);
+	EXPECT_EQ((std::vector<uint64_t>{38}),
+		decode(definition, target.packets[3], VMF_ENVELOPE_B, 1).values);
+	EXPECT_EQ(target.packets[2].bytes.size() + 1,
+		target.packets[3].bytes.size());
+	owner unsupported;
+
+	EXPECT_EQ(CV_INVALID_CONFIG, unsupported.load(workspace(definition,
+		output("unsupported", replace(first, "\"message\":0",
+			"\"message\":1")))));
+	EXPECT_NE(std::string::npos,
+		std::string(unsupported.error.message).find("message 1"));
+}
+
+TEST(Core, OutputProfilesPreserveRawOriginsAndPermitNamedOverrides)
+{
+	const std::string raw = replace(schema(field),
+		"\"message_standard\":\"MIL-STD-6017B\"",
+		"\"envelope\":\"C\",\"standard_version\":8");
+	std::string d1 = replace(mapping(latitude), "\"envelope\":\"C\"",
+		"\"envelope\":\"D1\"");
+	owner rejected;
+
+	EXPECT_EQ(CV_INVALID_CONFIG,
+		rejected.load(workspace(raw, output("raw", d1))));
+	EXPECT_EQ(nullptr, rejected.value);
+	const std::string named_override = replace(schema(field,
+		",\"message_standard\":\"MIL-STD-6017B\""),
+		"\"message_standard\":\"MIL-STD-6017B\"",
+		"\"envelope\":\"C\",\"standard_version\":8");
+	owner accepted;
+
+	ASSERT_EQ(CV_OK, accepted.load(workspace(named_override,
+		output("named", d1)))) << accepted.error.message;
+	sink target;
+	cv_activity activity = {};
+
+	EXPECT_EQ(CV_OK, process(&accepted, event(), &target, &activity));
+	ASSERT_EQ(1u, target.packets.size());
+	EXPECT_EQ((std::vector<uint64_t>{38}),
+		decode(named_override, target.packets[0], VMF_ENVELOPE_D1).values);
+	owner absent;
+	const std::string versionless = replace(schema(field),
+		"\"message_standard\":\"MIL-STD-6017B\"",
+		"\"standard_version\":\"absent\"");
+
+	EXPECT_EQ(CV_INVALID_CONFIG,
+		absent.load(workspace(versionless, output("absent", d1))));
+}
+
+TEST(Core, ExplicitMessageAndEnvelopeAreRequiredWithoutFallbacks)
+{
+	const std::string base = mapping(latitude);
+	for (const std::string &config : {
+		replace(base, "\"message\":0,", ""),
+		replace(base, "\"envelope\":\"C\",", ""),
+		replace(base, "\"message\":0", "\"message\":-1"),
+		replace(base, "\"message\":0", "\"message\":1"),
+		replace(base, "\"message\":0", "\"message\":0.0"),
+		replace(base, "\"message\":0", "\"message\":\"0\""),
+		replace(base, "\"message\":0", "\"message\":true"),
+		replace(base, "\"message\":0", "\"message\":null"),
+		replace(base, "\"message\":0",
+			"\"message\":18446744073709551615"),
+		replace(base, "\"envelope\":\"C\"", "\"envelope\":null"),
+		replace(base, "\"envelope\":\"C\"", "\"envelope\":2"),
+		replace(base, "\"envelope\":\"C\"", "\"envelope\":\"c\""),
+		replace(base, "cot-vmf-mapping-config/1",
+			"cot-vmf-mapping-config/999")}) {
+		SCOPED_TRACE(config);
 		owner loaded;
 
-		ASSERT_EQ(CV_OK, loaded.load(workspace(
-					 definition, output(profile, config))))
-			<< loaded.error.message;
+		EXPECT_EQ(CV_INVALID_CONFIG,
+			loaded.load(workspace(schema(field),
+				output("invalid", config))));
+		EXPECT_EQ(nullptr, loaded.value);
+	}
+	owner unsupported;
+
+	EXPECT_EQ(CV_INVALID_CONFIG, unsupported.load(replace(empty_workspace,
+		"cot-vmf-workspace/1", "cot-vmf-workspace/999")));
+}
+
+TEST(Core, HeaderMetadataDefaultsOnlyOmittedContainers)
+{
+	for (const char *header : {"{}", "{\"fields\":{}}",
+		"{\"fields\":{\"messages\":[{}]}}"}) {
+		owner loaded;
+
+		ASSERT_EQ(CV_OK, loaded.load(workspace(schema(field), output("ok",
+			mapping(latitude, ",\"vmf_header\":" +
+				std::string(header)))))) << loaded.error.message;
 		sink target;
 		cv_activity activity = {};
 
-		ASSERT_EQ(CV_OK, process(&loaded, event(), &target, &activity))
-			<< loaded.error.message;
+		EXPECT_EQ(CV_OK, process(&loaded, event(), &target, &activity));
 		ASSERT_EQ(1u, target.packets.size());
 		EXPECT_EQ((std::vector<uint64_t>{38}),
-			  decode(definition, target.packets[0]).values);
+			decode(schema(field), target.packets[0]).values);
+	}
+	for (const char *header : {"null", "[]", "{\"fields\":null}",
+		"{\"fields\":[]}", "{\"fields\":{\"messages\":null}}",
+		"{\"fields\":{\"messages\":{}}}",
+		"{\"fields\":{\"messages\":[]}}",
+		"{\"fields\":{\"messages\":[null]}}",
+		"{\"fields\":{\"messages\":[{},{}]}}",
+		"{\"fields\":{\"messages\":[{\"id\":null}]}}",
+		"{\"fields\":{\"messages\":[{\"id\":{}}]}}",
+		"{\"fields\":{\"messages\":[{\"response\":{}}]}}"}) {
+		SCOPED_TRACE(header);
+		owner loaded;
+
+		EXPECT_EQ(CV_INVALID_CONFIG, loaded.load(workspace(schema(field),
+			output("bad", mapping(latitude,
+				",\"vmf_header\":" + std::string(header))))));
+		EXPECT_EQ(nullptr, loaded.value);
 	}
 }
 

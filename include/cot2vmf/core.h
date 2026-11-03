@@ -61,6 +61,9 @@ typedef struct cv_activity {
 /* Load strict cot-vmf-workspace/1 JSON from size readable bytes (max 16 MiB).
  * Input is copied, never modified/retained. Schemas embed native vmf-schema/1
  * documents; each mapping's schema string refers to its workspace schema id.
+ * Mapping format cot-vmf-mapping-config/1 requires a zero-based message ordinal
+ * and explicit B/C/D/D1 envelope. Identity is derived from that selected
+ * message; optional vmf_header metadata must not contain an explicit id.
  * No schema paths are resolved. Duplicate ids/keys and unknown properties fail.
  * Enabled outputs must be completely valid; disabled outputs may be drafts.
  * Arrays contain at most 128 entries; ids contain 1..128 UTF-8 bytes, no NUL.
@@ -93,8 +96,11 @@ cv_status cv_process(const cv_workspace *workspace, const uint8_t *data,
 /* Inspect workspace JSON independently of output validity for authoring UIs.
  * NULL data with size zero selects an empty workspace. Structural/syntax errors
  * fail; invalid embedded schemas become per-schema diagnostics. The returned
- * cot-vmf-catalog/1 JSON includes all CoT fields, every valid schema message,
- * exact identity, generated header template, and canonical field metadata.
+ * cot-vmf-catalog/1 JSON includes all CoT fields and each valid message
+ * ordinal with shared canonical field metadata. Its profiles object contains
+ * B/C/D/D1 availability, diagnostics, exact identities and header previews;
+ * unavailable profiles retain the message and expose null identity/header.
+ * Availability binds only the selected message, not unrelated definitions.
  * result is required and cleared on every failure. Input limits match load.
  */
 cv_status cv_catalog(const uint8_t *data, size_t size, cv_buffer *result,

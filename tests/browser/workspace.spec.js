@@ -90,10 +90,7 @@ test('Delete removes only the selected wire and preserves text editing',
 function output(id, mapping = {}, enabled = false) {
   return { id, enabled, mapping: {
     format: 'cot-vmf-mapping-config/1', schema: 'repair',
-    vmf_header: { fields: { messages: [{ id: {
-      user_message_format: 2, standard_version: 0,
-      identification: { functional_area: 1, message_number: 1 },
-    } }] } }, fields: [], ...mapping,
+    message: 0, envelope: 'C', fields: [], ...mapping,
   } };
 }
 
@@ -184,7 +181,7 @@ test('orphaned outputs remain selectable for repair and removal after reload',
   async ({ page, request }) => {
     const orphan = output('orphan-schema', { schema: 'missing' });
     const header = output('orphan-header');
-    header.mapping.vmf_header.fields.messages[0].id.identification.message_number = 9;
+    header.mapping.message = 9;
     await draft(request, [orphan, header]);
     await page.goto('/');
     await page.reload();
@@ -218,8 +215,8 @@ test('orphaned outputs remain selectable for repair and removal after reload',
     expect((await state(request)).draft.outputs).toHaveLength(2);
     await outputs.nth(1).click();
     await expandMapping(page);
-    const number = page.locator('#mapping-editor [data-property="message_number"]');
-    await number.fill('1'); await number.press('Tab');
+    const number = page.locator('#mapping-editor [data-property="message"]');
+    await number.fill('0'); await number.press('Tab');
     await saved(page);
     await expect(page.locator('#output-list .output-unresolved')).toHaveCount(0);
     await page.locator('#output-list [aria-label="Enable output orphan-header"]').check();
@@ -334,10 +331,7 @@ test('deleting a schema removes its outputs and retains unrelated outputs',
     const current = await state(request);
     const output = (id, schemaId, enabled) => ({ id, enabled, mapping: {
       format: 'cot-vmf-mapping-config/1', schema: schemaId,
-      vmf_header: { fields: { messages: [{ id: {
-        user_message_format: 2, standard_version: 0,
-        identification: { functional_area: 1, message_number: 1 },
-      } }] } }, fields: [],
+      message: 0, envelope: 'C', fields: [],
     } });
     const response = await request.post('/api/state', { data: {
       revision: current.draft_revision, workspace: {
@@ -362,7 +356,7 @@ test('deleting a schema removes its outputs and retains unrelated outputs',
     await page.reload();
     expect((await state(request)).draft.outputs.map(item => item.id))
       .toEqual(['retained']);
-    await expect(page.locator('.message-enable input:checked')).toHaveCount(1);
+    await expect(page.locator('#output-list input:checked')).toHaveCount(1);
   });
 
 test('author a native schema visually and retain it across reload',
@@ -564,6 +558,14 @@ test('stimulated authoring accepts a subset and explains each test result',
     await page.locator('.source-port[data-source-path="send_time_ms"]').click();
     await page.locator('.target-port[data-target-index="1"]').click();
     await saved(page);
+    const created = (await state(request)).draft.outputs[0];
+    expect(created.enabled).toBe(false);
+    expect(created.mapping).not.toHaveProperty('envelope');
+    await page.locator('#output-list [data-output-id="' + created.id + '"]').click();
+    await page.getByRole('combobox', { name: 'Output envelope', exact: true }).selectOption('C');
+    await saved(page);
+    await page.getByRole('checkbox', { name: 'Enable output ' + created.id }).check();
+    await saved(page);
     const results = page.getByRole('region', { name: 'Live test results' });
     await expect(results).toContainText(/Waiting for traffic|Waiting for the next event after your edit/);
     expect((await state(request)).draft.outputs[0].enabled).toBe(true);
@@ -748,7 +750,7 @@ test('a null schema document stays intact until repaired through the browser',
     const saved = await state(request);
     expect(saved.draft.schemas[0]).toEqual(document.schemas[0]);
     expect(saved.draft.schemas[1]).toEqual({ id: 'broken', document: {
-      format: 'vmf-schema/1', envelope: 'B', messages: [],
+      format: 'vmf-schema/1', messages: [],
     } });
     expect(saved.active_revision).toBe(saved.draft_revision);
     await page.reload();
@@ -981,7 +983,7 @@ test('guided payload encoding changes remove dependent settings in one undo',
     expect((await state(request)).draft.schemas[0].document).toEqual(document);
   });
 
-test('schema envelope filters standards and undo restores exact selectors',
+test('schema defaults preserve semantic standards and undo restores selectors',
   async ({page, request}) => {
     const document = JSON.parse(JSON.stringify(schema));
     document.messages[0].message_standard = 'MIL-STD-6017A';
@@ -990,8 +992,8 @@ test('schema envelope filters standards and undo restores exact selectors',
     await page.locator('#schema-editor [data-property="envelope"]').selectOption('B');
     await saved(page);
     let next = (await state(request)).draft.schemas[0].document;
-    expect(next).not.toHaveProperty('standard_version');
-    expect(next.messages[0]).not.toHaveProperty('message_standard');
+    expect(next.standard_version).toBe(0);
+    expect(next.messages[0].message_standard).toBe('MIL-STD-6017A');
     await page.locator('#schema-undo').click(); await saved(page);
     expect((await state(request)).draft.schemas[0].document).toEqual(document);
     await payloadStep(page, '2. Standard');
@@ -1000,7 +1002,7 @@ test('schema envelope filters standards and undo restores exact selectors',
     await saved(page);
     expect((await state(request)).draft.schemas[0].document.standard_version).toBe(9);
     await page.locator('[data-property="standard_selection"]').selectOption('edition');
-    await expect(page.locator('[data-property="message_standard"] option').filter({hasText: 'MIL-STD-6017D'})).toHaveCount(0);
+    await expect(page.locator('[data-property="message_standard"] option').filter({hasText: 'MIL-STD-6017D'})).toHaveCount(1);
   });
 
 test('nested repeat steps filter fixed versus scalar properties and undo them',
@@ -1287,4 +1289,169 @@ test('repair-form help distinguishes workspace and mapping formats',
     }).click();
     await expect(page.getByRole('tooltip')).toContainText('cot-vmf-workspace/1');
     expect((await state(request)).draft.outputs).toBeNull();
+  });
+
+function portableDefinition() {
+  const definition = structuredClone(schema);
+  delete definition.envelope;
+  delete definition.standard_version;
+  definition.message_standard = 'MIL-STD-6017B';
+  return definition;
+}
+
+test('one portable payload serves explicit outputs in every envelope',
+  async ({page, request}) => {
+    test.setTimeout(60000);
+    const definition = portableDefinition();
+    await payloadDraft(request, definition);
+    await page.goto('/');
+    const catalog = (await state(request)).catalog.schemas[0].messages[0];
+    expect(catalog.fields).toHaveLength(2);
+    expect(Object.keys(catalog.profiles)).toEqual(['B', 'C', 'D', 'D1']);
+    const ids = [];
+    for (const envelope of ['B', 'C', 'D', 'D1', 'C']) {
+      await page.getByRole('button', {
+        name: 'Add output for payload message 0', exact: true,
+      }).click();
+      await saved(page);
+      const created = (await state(request)).draft.outputs.at(-1);
+      ids.push(created.id);
+      expect(created.enabled).toBe(false);
+      expect(created.mapping.message).toBe(0);
+      expect(created.mapping).not.toHaveProperty('envelope');
+      expect(created.mapping).not.toHaveProperty('vmf_header');
+      const enable = page.getByRole('checkbox', {
+        name: 'Enable output ' + created.id, exact: true,
+      });
+      await expect(enable).toBeDisabled();
+      await page.getByRole('combobox', {name: 'Output envelope', exact: true})
+        .selectOption(envelope);
+      await saved(page);
+      const identity = JSON.parse(await page.locator('.derived-identity')
+        .textContent());
+      if (envelope === 'B') expect(identity).not.toHaveProperty('standard_version');
+      else expect(identity.standard_version).toBe(envelope === 'C' ? 8 : 7);
+      await expect(page.locator('#mapping-editor [data-property="id"]'))
+        .toHaveCount(0);
+      for (const [source, target] of [
+        ['send_time_ms', '1'], ['detail.status.battery', '2'],
+      ]) {
+        await page.locator('.source-port[data-source-path="' + source + '"]')
+          .click();
+        await page.locator('.target-port[data-target-index="' + target + '"]')
+          .click();
+        await saved(page);
+      }
+      await enable.check();
+      await saved(page);
+    }
+    let snapshot = await state(request);
+    expect(snapshot.valid).toBe(true);
+    expect(new Set(ids).size).toBe(5);
+    expect(snapshot.draft.schemas[0].document).toEqual(definition);
+    expect(snapshot.draft.outputs.map(item => item.mapping.envelope))
+      .toEqual(['B', 'C', 'D', 'D1', 'C']);
+    expect(snapshot.draft.outputs.every(item =>
+      !Object.hasOwn(item.mapping, 'vmf_header'))).toBe(true);
+    await receiveEvent();
+    await expect.poll(async () => (await state(request)).activity.outputs_succeeded)
+      .toBeGreaterThanOrEqual(5);
+    await page.reload();
+    await expect(page.locator('#output-list .output-select')).toHaveCount(5);
+    snapshot = await state(request);
+    expect(snapshot.draft.outputs.map(item => item.id)).toEqual(ids);
+  });
+
+test('shared message connections require a chosen output and keep duplicates',
+  async ({page, request}) => {
+    await draft(request, [output('first'), output('second')]);
+    await page.goto('/');
+    await page.locator('.source-port[data-source-path="send_time_ms"]').click();
+    await page.locator('.target-port[data-target-index="1"]').click();
+    await expect(page.locator('#mapping-inspector-title'))
+      .toHaveText('Choose an output');
+    expect((await state(request)).draft.outputs).toHaveLength(2);
+    await page.locator('#mapping-editor').getByRole('button', {
+      name: 'second · C', exact: true,
+    }).click();
+    await page.locator('.target-port[data-target-index="1"]').click();
+    await saved(page);
+    const outputs = (await state(request)).draft.outputs;
+    expect(outputs[0].mapping.fields).toEqual([]);
+    expect(outputs[1].mapping.fields).toHaveLength(1);
+    expect(outputs.every(item => item.enabled === false)).toBe(true);
+    await expect(page.locator('#output-list .output-select')).toHaveCount(2);
+  });
+
+test('unsupported selected envelopes keep shared fields and remain repairable',
+  async ({page, request}) => {
+    const definition = portableDefinition();
+    definition.message_standard = 'MIL-STD-6017D';
+    const selected = output('unsupported', {schema: 'payload', envelope: 'C',
+      fields: [{cot: 'send_time_ms', vmf: {index: '1.'}}]});
+    await payloadDraft(request, definition, [selected]);
+    await page.goto('/');
+    await expect(page.locator('.target-port')).toHaveCount(2);
+    await expect(page.locator('path.wire')).toHaveCount(1);
+    await page.locator('#output-list [data-output-id="unsupported"]').click();
+    const choice = page.getByRole('combobox', {name: 'Output envelope', exact: true});
+    await expect(choice).toHaveValue('C');
+    await expect(page.locator('#mapping-editor .schema-invalid')).not.toBeEmpty();
+    await expect(page.getByRole('checkbox', {name: 'Enable output unsupported'}))
+      .toBeDisabled();
+    expect((await state(request)).draft.outputs[0]).toEqual(selected);
+    await choice.selectOption('D1');
+    await saved(page);
+    await expect(page.locator('.derived-identity')).toContainText('9');
+    expect((await state(request)).draft.schemas[0].document).toEqual(definition);
+    await expect(page.locator('#output-list .output-select.selected'))
+      .toHaveAttribute('data-output-id', 'unsupported');
+  });
+
+test('message moves and deletion update ordinals and undo restores references',
+  async ({page, request}) => {
+    const definition = portableDefinition();
+    definition.messages = [1, 2, 3].map(number => ({
+      ...structuredClone(definition.messages[0]), message_number: 'K01.' + number,
+    }));
+    const outputs = [0, 1, 2].map(ordinal => output('ordinal-' + ordinal,
+      {schema: 'payload', message: ordinal}, true));
+    await payloadDraft(request, definition, outputs);
+    await page.goto('/');
+    await payloadDefinition(page);
+    await page.locator('.tree-select').filter({hasText: /^K01\.1$/}).click();
+    await page.getByRole('button', {name: 'Move message down', exact: true}).click();
+    await saved(page);
+    expect((await state(request)).draft.outputs.map(item => item.mapping.message))
+      .toEqual([1, 0, 2]);
+    await page.locator('[data-tab="mapping"]').click();
+    await page.locator('#output-list [data-output-id="ordinal-2"]').click();
+    const properties = page.locator('#mapping-editor > .object-editor');
+    await properties.locator(':scope > .add-property select').selectOption('name');
+    await properties.locator(':scope > .add-property').getByRole('button', {
+      name: '+ Add', exact: true,
+    }).click();
+    await page.locator('#mapping-editor [data-property="name"]').fill('keep edit');
+    await page.locator('#mapping-editor [data-property="name"]').press('Tab');
+    await saved(page);
+    await page.locator('[data-tab="schemas"]').click();
+    await page.locator('#schema-undo').click();
+    await saved(page);
+    expect((await state(request)).draft.outputs.map(item => item.mapping.message))
+      .toEqual([0, 1, 2]);
+    expect((await state(request)).draft.outputs[2].mapping.name).toBe('keep edit');
+    await page.locator('.tree-select').filter({hasText: /^K01\.2$/}).click();
+    await page.getByRole('button', {name: 'Delete message', exact: true}).click();
+    await saved(page);
+    let snapshot = await state(request);
+    expect(snapshot.draft.outputs[1].enabled).toBe(false);
+    expect(snapshot.draft.outputs[1].mapping).not.toHaveProperty('message');
+    expect(snapshot.draft.outputs[2].mapping.message).toBe(1);
+    await page.locator('#schema-undo').click();
+    await saved(page);
+    snapshot = await state(request);
+    expect(snapshot.draft.outputs.map(item => item.mapping.message))
+      .toEqual([0, 1, 2]);
+    expect(snapshot.draft.outputs[1].enabled).toBe(true);
+    expect(snapshot.draft.outputs[2].mapping.name).toBe('keep edit');
   });

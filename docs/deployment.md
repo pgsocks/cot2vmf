@@ -13,8 +13,9 @@ cmake --install build/release --prefix /usr/local
 ```
 
 Installation includes the CLI, public headers, and separate static libraries
-for the translator and its native dependencies. CPM still builds the exact
-pinned sources; consumers use the installed CMake packages without CPM:
+for the translator and its native dependencies. CPM builds pinned
+implementations with repository CMake integration patches; consumers use the
+installed CMake packages without CPM:
 
 ```cmake
 cmake_minimum_required(VERSION 3.24)

@@ -244,7 +244,7 @@ const cotFieldHelp = {
 
 const schemaPropertyHelp = {
   format: "The native document format identifier. Payload definitions use vmf-schema/1.",
-  envelope: "The VMF envelope profile. This choice determines which standard versions and header properties are valid.",
+  envelope: "An optional default envelope and the source profile for literal raw version codes. Each output chooses its own envelope; named payload editions retain their meaning.",
   message_standard: "A named standard edition. It is an alternative to a raw standard_version at this level; a message-level selection replaces the schema-level selection.",
   standard_version: "An exact raw standard-version code, or absent where the profile permits it. It is an alternative to message_standard, not an automatic latest-version choice.",
   message_number: "The VMF K-series message number, such as K01.1. Standard-version and subtype presence also participate in the exact message identity.",
@@ -293,6 +293,8 @@ const mappingPropertyHelp = {
   format: "The native mapping format identifier. Outputs use cot-vmf-mapping-config/1.",
   name: "An optional human-readable name for this output mapping.",
   schema: "The workspace schema ID containing this output's message definition. It is not a filesystem path.",
+  message: "The zero-based ordinal of the selected message in the schema document. Message 0 is the first definition.",
+  envelope: "The envelope explicitly selected for this output. Its header identity is derived from the selected payload definition.",
   cot: "The canonical CoT source path. Only standard individually mappable catalog fields can supply a connection.",
   vmf: "The target VMF field, selected by a unique key or a numeric index within this output's exact message.",
   key: "The unique application key of the target field. Select either key or index for a target reference.",
@@ -312,7 +314,7 @@ const mappingPropertyHelp = {
   present: "Whether the selected GPI-controlled group is present in the encoded message.",
   repeat_counts: "Explicit counts for FRI/GRI-controlled repeats. Fixed and preceding-scalar repeats remain governed by their schema.",
   count: "The explicitly asserted number of occurrences of an FRI/GRI-controlled repeat.",
-  vmf_header: "The native VMF envelope header. Its exact message identity chooses the payload definition; absent version or subtype values are not wildcards.",
+  vmf_header: "Optional envelope metadata. Omitted values use native defaults; message identity comes from the selected schema, ordinal, and envelope and must not be supplied here.",
   id: "The exact native VMF message identity. This must match a message in the selected schema.",
   user_message_format: "The native user-message-format code. Payload schema definitions in this application select VMF format 2.",
   standard_version: "The exact raw standard-version code in the message identity. Present zero differs from an absent version.",
@@ -374,14 +376,14 @@ function propertyHelp(key, path = "") {
   if (/^workspace\/outputs\/\d+$/.test(path)) return {
     id: "The unique workspace identifier of this output.",
     enabled: "Attempt this output for incoming CoT events when enabled.",
-    mapping: "The output's schema reference, exact header identity, and field mappings.",
+    mapping: "The output's schema, message ordinal, chosen envelope, and field mappings.",
   }[key];
   if (path.startsWith("workspace/")
       && !/^workspace\/outputs\/\d+\/mapping(?:\/|$)/.test(path)) return undefined;
   if (key === "fields" && path.includes("vmf_header"))
-    return "The native envelope header fields, including its addresses and exact message identity.";
+    return "Optional native envelope metadata, including addresses. The message identity is derived and cannot be edited here.";
   if (key === "messages" && path.includes("vmf_header"))
-    return "Native message header descriptors. An output selects exactly one payload message identity.";
+    return "Optional metadata for one body descriptor. Its identity is generated from the selected message and envelope.";
   if (key === "name" && /\/(originator|recipients|information_addressees)(\/|$)/.test(path))
     return "The text form of a native address. A present address uses either name or URN.";
   if (key === "index" && path.includes("occurrences"))
@@ -429,7 +431,7 @@ const conditionSpec = object({mode: enumeration("all", "any"), negate: boolean, 
 const indexSpec = object({index_number: text, number_of_bits: {...integer, initial: 1}, key: text, group_code: text, repeat_code: text, encode_type: enumeration("default", "bool", "unsigned", "signed", "enum", "scaled", "bits", "octets", "text", "literal"), indicator: enumeration("none", "fpi", "gpi", "fri", "gri"), target: text, representation: enumeration("default", "unsigned", "twos_complement", "ones_complement", "sign_magnitude"), bit_order: order, text_encoding: enumeration("default", "ascii_7", "ascii_8", "latin_1", "utf_8"), length_from: text, length_bias: integer, when: conditionSpec, allowed: array(rangeSpec), constant: integer, scale: object({factor: rationalSpec, bias: rationalSpec, sentinels: array(integer)}, ["factor", "bias"])}, ["index_number", "number_of_bits"]);
 const repeatSpec = object({repeat_code: text, count: integer, count_from: text, maximum: integer, minimum: integer, bias: integer}, ["repeat_code"]);
 const nativeMessageSpec = object({message_number: text, indexes: array(indexSpec), message_standard: standards, standard_version: scalar, subtype: integer, repeats: array(repeatSpec), octet_order: order}, ["message_number", "indexes"]);
-const schemaSpec = object({format: {kind: "enum", values: ["vmf-schema/1"]}, envelope: enumeration("B", "C", "D", "D1"), message_standard: standards, standard_version: scalar, messages: array(nativeMessageSpec)}, ["format", "envelope", "messages"]);
+const schemaSpec = object({format: {kind: "enum", values: ["vmf-schema/1"]}, envelope: enumeration("B", "C", "D", "D1"), message_standard: standards, standard_version: scalar, messages: array(nativeMessageSpec)}, ["format", "messages"]);
 const occurrenceSpec = object({repeat: integer, index: integer}, ["repeat", "index"]);
 const targetSpec = object({key: text, index: scalar});
 const bindingSpec = object({cot: text, vmf: targetSpec, factor: {...number, initial: 1}, offset: number, values: array(object({cot: scalar, vmf: integer}, ["cot", "vmf"])), encoding: enumeration("hex"), bit_count: integer, occurrences: array(occurrenceSpec)}, ["cot", "vmf"]);
@@ -438,16 +440,14 @@ const addressSpec = object({urn: integer, name: text});
 const workspaceSpec = object({format: enumeration("cot-vmf-workspace/1"), schemas: array(object({id: text, document: schemaSpec}, ["id", "document"])), outputs: array(object({id: text, enabled: boolean, mapping: object({})}, ["id", "enabled", "mapping"]))}, ["format", "schemas", "outputs"]);
 const dtgSpec = object({year: integer, month: {...integer, initial: 1}, day: {...integer, initial: 1}, hour: integer, minute: integer, second: integer, extension: integer}, ["year", "month", "day", "hour", "minute", "second"]);
 function headerSpec(profile) {
-  const idSpec = object({user_message_format: {...integer, initial: 2}, standard_version: integer, identification: object({functional_area: integer, message_number: integer, subtype: integer}, ["functional_area", "message_number"])}, ["user_message_format", "identification"]);
-  if (profile === "B") delete idSpec.properties.standard_version;
   const reference = object({originator: addressSpec, dtg: dtgSpec, ...(profile === "B" ? {functional_area: integer, message_number: integer} : {})}, ["originator", "dtg"]);
-  const props = {id: idSpec, file_name: text, message_size_octets: integer, operation: integer, retransmit: boolean, precedence: integer, classification: integer, originator_dtg: dtgSpec, perishability: dtgSpec, acknowledgment: object({machine: boolean, operator_ack: boolean, operator_reply: boolean}), response: object({acknowledged: dtgSpec, receipt_compliance: integer, cantco_reason: integer, cantpro_reason: integer, amplification: text}, ["receipt_compliance"]), references: array(reference)};
-  if (profile === "B") props.marking_b = integer;
-  else if (profile === "C") props.marking_c = text;
-  else props.markings = array(integer);
-  const fields = {compression: integer, originator: addressSpec, recipients: array(addressSpec), information_addressees: array(addressSpec), messages: array(object(props, ["id"]))};
+  const props = {file_name: text, message_size_octets: integer, operation: integer, retransmit: boolean, precedence: integer, classification: integer, originator_dtg: dtgSpec, perishability: dtgSpec, acknowledgment: object({machine: boolean, operator_ack: boolean, operator_reply: boolean}), response: object({acknowledged: dtgSpec, receipt_compliance: integer, cantco_reason: integer, cantpro_reason: integer, amplification: text}, ["receipt_compliance"]), references: array(reference)};
+  if (!envelopeProfiles.includes(profile) || profile === "B") props.marking_b = integer;
+  if (!envelopeProfiles.includes(profile) || profile === "C") props.marking_c = text;
+  if (!envelopeProfiles.includes(profile) || profile === "D" || profile === "D1") props.markings = array(integer);
+  const fields = {compression: integer, originator: addressSpec, recipients: array(addressSpec), information_addressees: array(addressSpec), messages: {...array(object(props)), initial: [{}]}};
   if (profile !== "B") fields.header_size_octets = integer;
-  return object({fields: object(fields, ["messages"]), ...(profile === "B" ? {} : {shortened: boolean})}, ["fields"]);
+  return object({fields: object(fields), ...(profile === "B" ? {} : {shortened: boolean})});
 }
 function initial(spec) {
   if (spec.initial !== undefined) return clone(spec.initial);
@@ -469,6 +469,8 @@ function infer(value) {
 let state = {draft: {format: "cot-vmf-workspace/1", schemas: [], outputs: []}, catalog: {cot: [], schemas: []}};
 let workspace = state.draft, generation = 0, savedGeneration = 0, saving = false, saveTimer;
 let selectedSchema = null, selectedMessage = null, selectedIndex = null, selectedWire = null, selectedOutput = null;
+let pendingMessage = null;
+const envelopeProfiles = ["B", "C", "D", "D1"];
 let armedSource = null, dragging = null, pointerPosition = null, activeFields = new Set(), liveTimer, wireFrame;
 let pointerGesture = null, suppressPointerClick = false;
 let latestActivity = null;
@@ -556,6 +558,7 @@ function editor(value, spec, set, label = "", path = "") {
   }
   if (spec.kind === "object") {
     for (const [key, current] of Object.entries(value)) {
+      if (spec.hidden?.includes(key)) continue;
       const row = el("div", "property"), name = el("div", "property-label");
       row.dataset.propertyName = key;
       name.append(el("code", "", key));
@@ -566,7 +569,7 @@ function editor(value, spec, set, label = "", path = "") {
       const childSpec = spec.properties[key] || infer(current);
       const nested = current !== null && typeof current === "object";
       const propertyPath = path + "/" + key;
-      const control = editor(current, childSpec, next => { value[key] = next; set(value); }, key, propertyPath);
+      const control = editor(current, childSpec, next => { value[key] = next; set(value); if (spec.refreshOn?.includes(key)) setTimeout(() => { renderMapping(); renderMappingEditor(); }, 0); }, key, propertyPath);
       if (nested) {
         const details = el("details"); details.open = expandedProperties.has(propertyPath);
         details.addEventListener("toggle", () => { if (details.open) expandedProperties.add(propertyPath); else expandedProperties.delete(propertyPath); });
@@ -575,7 +578,7 @@ function editor(value, spec, set, label = "", path = "") {
       } else row.append(control);
       node.append(row);
     }
-    const missing = Object.keys(spec.properties).filter(key => !Object.prototype.hasOwnProperty.call(value, key));
+    const missing = Object.keys(spec.properties).filter(key => !spec.hidden?.includes(key) && !Object.prototype.hasOwnProperty.call(value, key));
     if (missing.length) {
       const addition = el("div", "add-property"), select = el("select"); select.dataset.testid = "add-property";
       select.setAttribute("aria-label", "Property to add");
@@ -669,10 +672,7 @@ const guidedOwn = (value, key) => Object.prototype.hasOwnProperty.call(value, ke
 const guidedLabel = key => key.replace(/_/g, " ").replace(/^./, char => char.toUpperCase());
 const guidedControllerKeys = ["indicator", "encode_type", "representation", "text_encoding", "length_from"];
 const guidedScalarTypes = ["default", "bool", "unsigned", "signed", "enum", "scaled"];
-const guidedStandardNames = {
-  C: ["MIL-STD-6017", "MIL-STD-6017A", "MIL-STD-6017B", "MIL-STD-6017C", "TIDP-TE-R2", "TIDP-TE-R3", "TIDP-TE-R4", "TIDP-TE-R5", "TIDP-TE-R6", "TIDP-TE-R7"],
-  D: ["MIL-STD-6017", "MIL-STD-6017A", "MIL-STD-6017B", "MIL-STD-6017C", "MIL-STD-6017D", "MIL-STD-6017E", "TIDP-TE-R2", "TIDP-TE-R3", "TIDP-TE-R4", "TIDP-TE-R5", "TIDP-FTE-R6"]
-};
+
 function resetSchemaHistory() {
   schemaUndoHistory.length = 0; schemaSteps.clear(); schemaStepReach.clear(); schemaExplanation = "";
 }
@@ -682,12 +682,13 @@ function schemaSelection() {
 function schemaChange(label, action, refresh = true) {
   const before = clone(workspace.schemas), selection = schemaSelection();
   const steps = [...schemaSteps], reach = [...schemaStepReach];
-  const outputs = draftOutputs().map((entry, index) => ({entry, index}));
+  const outputs = draftOutputs().map((entry, index) => ({entry, index, reference: {schema: entry.mapping?.schema, message: entry.mapping?.message, enabled: entry.enabled}}));
   action();
   if (json(before) === json(workspace.schemas)) return false;
   const removedOutputs = outputs.filter(({entry}) => !workspace.outputs.includes(entry))
     .map(({entry, index}) => ({entry: clone(entry), index}));
-  schemaUndoHistory.push({label, schemas: before, selection, removedOutputs, steps, reach});
+  const referenceChanges = outputs.filter(({entry}) => workspace.outputs.includes(entry)).map(({entry, reference}) => ({id: entry.id, before: reference, after: {schema: entry.mapping?.schema, message: entry.mapping?.message, enabled: entry.enabled}})).filter(change => json(change.before) !== json(change.after));
+  schemaUndoHistory.push({label, schemas: before, selection, removedOutputs, referenceChanges, steps, reach});
   changed();
   if (refresh) render();
   else { renderSchemas(); updateSchemaUndo(); scheduleWires(); }
@@ -709,6 +710,16 @@ function undoSchemaChange() {
   for (const {entry: output, index} of entry.removedOutputs) {
     if (!workspace.outputs.some(current => current.id === output.id)) workspace.outputs.splice(Math.min(index, workspace.outputs.length), 0, clone(output));
   }
+  for (const change of entry.referenceChanges || []) {
+    const output = draftOutputs().find(item => item.id === change.id);
+    if (!isObject(output?.mapping) || output.mapping.schema !== change.after.schema) continue;
+    for (const key of ["message", "enabled"]) {
+      const owner = key === "enabled" ? output : output.mapping;
+      if (json(owner[key]) !== json(change.after[key])) continue;
+      if (change.before[key] === undefined) delete owner[key];
+      else owner[key] = change.before[key];
+    }
+  }
   workspace.schemas = clone(entry.schemas);
   selectedSchema = entry.selection.schema;
   selectedMessage = entry.selection.message; selectedIndex = entry.selection.index;
@@ -725,15 +736,6 @@ function guidedHelp(name, description) {
 function guidedNote(container, text) { container.append(el("p", "property-help", text)); }
 function guidedRemove(owner, keys, removed) {
   for (const key of keys) if (guidedOwn(owner, key)) { delete owner[key]; removed.push(key); }
-}
-function guidedPruneStandard(owner, envelope, removed) {
-  const names = envelope === "B" ? [] : guidedStandardNames[envelope === "C" ? "C" : "D"] || [];
-  if (guidedOwn(owner, "message_standard") && !names.includes(owner.message_standard)) guidedRemove(owner, ["message_standard"], removed);
-  if (guidedOwn(owner, "standard_version")) {
-    const value = owner.standard_version;
-    const valid = value === "absent" ? envelope === "B" || envelope === "C" : Number.isInteger(value) && value >= 0 && value <= (envelope === "C" ? 9 : 10) && envelope !== "B";
-    if (!valid) guidedRemove(owner, ["standard_version"], removed);
-  }
 }
 function guidedIndexKeys(field) {
   const keys = ["index_number", "number_of_bits", "key", "group_code", "repeat_code", "indicator"];
@@ -862,10 +864,6 @@ function guidedField(owner, key, spec, path, context = {}, options = {}) {
       if (options.controller) guidedController("change " + guidedLabel(key), removed => {
         owner[key] = next;
         if (options.setValue) options.setValue(next);
-        if (key === "envelope") {
-          guidedPruneStandard(owner, next, removed);
-          for (const msg of Array.isArray(owner.messages) ? owner.messages : []) if (isObject(msg)) guidedPruneStandard(msg, next, removed);
-        }
         if (context.field === owner && guidedControllerKeys.includes(key)) guidedPruneField(owner, removed);
         if (options.after) options.after(removed);
       });
@@ -925,13 +923,13 @@ function guidedStepper(path, stages) {
   node.append(actions); return node;
 }
 function guidedStandard(target, owner, path, envelope, isMessage) {
-  const names = envelope === "B" ? [] : guidedStandardNames[envelope === "C" ? "C" : "D"] || [];
+  const names = standards.values;
   const hasNamed = guidedOwn(owner, "message_standard"), hasRaw = guidedOwn(owner, "standard_version");
   const mode = hasNamed && hasRaw ? "conflict" : hasNamed ? "edition" : hasRaw ? owner.standard_version === "absent" ? "absent" : "raw" : "inherit";
   const row = el("div", "property"), select = el("select");
   select.setAttribute("aria-label", "Standard selection"); select.dataset.property = "standard_selection";
   select.add(new Option(isMessage ? "Inherit schema selection" : "No shared standard selection", "inherit"));
-  if (envelope === "B" || envelope === "C") select.add(new Option("Explicitly absent", "absent"));
+  select.add(new Option("Explicitly absent", "absent"));
   if (names.length) { select.add(new Option("Named edition", "edition")); select.add(new Option("Raw version code", "raw")); }
   if (![...select.options].some(option => option.value === mode)) select.add(new Option("Saved selection needs repair", mode));
   select.value = mode;
@@ -947,7 +945,7 @@ function guidedStandard(target, owner, path, envelope, isMessage) {
   }));
   if (hasNamed) target.append(guidedField(owner, "message_standard", {kind: "enum", values: names}, path, {}, {required: true}));
   if (hasRaw && owner.standard_version !== "absent") {
-    const codes = Array.from({length: envelope === "C" ? 10 : envelope === "B" ? 0 : 11}, (_, index) => index);
+    const codes = Array.from({length: 11}, (_, index) => index);
     const control = guidedField(owner, "standard_version", {kind: "enum", values: codes}, path, {}, {required: true});
     // Native version codes are numbers, despite HTML option values being strings.
     const input = control.querySelector("select");
@@ -955,7 +953,7 @@ function guidedStandard(target, owner, path, envelope, isMessage) {
     target.append(control);
   }
   if (mode === "conflict") guidedNote(target, "Choose one selection mechanism to replace these conflicting saved properties.");
-  guidedNote(target, envelope === "B" ? "Envelope B carries no standard version." : envelope === "C" ? "C supports an absent version or codes 0–9." : "D and D1 require a resolved version for each message. Select a shared version or override it on every message.");
+  guidedNote(target, "Named editions are shared by compatible output envelopes. B omits their version; C/D/D1 map it to their own codes. A raw code retains its source-profile restriction when a default envelope is present.");
 }
 function guidedValue(value, spec, set, path, context = {}) {
   if (spec.kind === "array") {
@@ -1002,7 +1000,7 @@ function guidedMalformedItems(target, value, spec, path, context) {
 function guidedSchema(value, path) {
   const node = el("div");
   node.append(guidedStepper(path, [
-    {title: "Envelope", render: target => { guidedNote(target, "The envelope determines which standard selections and headers are valid."); target.append(guidedField(value, "envelope", schemaSpec.properties.envelope, path, {}, {required: true, controller: true})); target.append(guidedField(value, "format", schemaSpec.properties.format, path, {}, {required: true})); }},
+    {title: "Defaults", render: target => { guidedNote(target, "A default envelope is optional. Each output explicitly chooses its envelope. Changing this default preserves all payload standard selections."); target.append(guidedField(value, "envelope", schemaSpec.properties.envelope, path, {}, {controller: true})); target.append(guidedField(value, "format", schemaSpec.properties.format, path, {}, {required: true})); }},
     {title: "Standard", render: target => guidedStandard(target, value, path, value.envelope, false)},
     {title: "Messages", render: target => { guidedNote(target, "Use + Message and the outline to edit message identities, fields, and repeat definitions."); if (!Array.isArray(value.messages)) target.append(guidedField(value, "messages", schemaSpec.properties.messages, path, {}, {required: true})); else { guidedNote(target, value.messages.length + " message definitions."); guidedMalformedItems(target, value.messages, nativeMessageSpec, path + "/messages", {}); } }}
   ]));
@@ -1012,7 +1010,7 @@ function guidedSchema(value, path) {
 function guidedMessage(value, path) {
   const node = el("div"), context = {message: value};
   node.append(guidedStepper(path, [
-    {title: "Identity", render: target => { guidedFields(target, value, nativeMessageSpec, ["message_number", "subtype"], path, context); guidedStandard(target, value, path, selectedDefinition()?.envelope || "C", true); }},
+    {title: "Identity", render: target => { guidedFields(target, value, nativeMessageSpec, ["message_number", "subtype"], path, context); guidedStandard(target, value, path, selectedDefinition()?.envelope, true); }},
     {title: "Packing", render: target => { guidedFields(target, value, nativeMessageSpec, ["octet_order"], path, context); guidedNote(target, "Use + Add field to message and the outline to define fields in wire order."); if (!Array.isArray(value.indexes)) target.append(guidedField(value, "indexes", nativeMessageSpec.properties.indexes, path, context, {required: true})); else guidedMalformedItems(target, value.indexes, indexSpec, path + "/indexes", context); }},
     {title: "Repeats", render: target => guidedFields(target, value, nativeMessageSpec, ["repeats"], path, context)}
   ]));
@@ -1151,13 +1149,43 @@ function renderSchemaEditor() {
     if (selectedIndex !== null) {
       const up = button("Move field up", () => { if (selectedIndex) schemaChange("move field", () => { const fields = definition.messages[selectedMessage].indexes; [fields[selectedIndex - 1], fields[selectedIndex]] = [fields[selectedIndex], fields[selectedIndex - 1]]; selectedIndex--; }); }); up.disabled = selectedIndex === 0;
       actions.append(up, button("Delete field", () => schemaChange("delete field", () => { definition.messages[selectedMessage].indexes.splice(selectedIndex, 1); selectedIndex = null; }), "text-button danger"));
-    } else actions.append(button("Delete message", () => schemaChange("delete message", () => { definition.messages.splice(selectedMessage, 1); selectedMessage = selectedIndex = null; }), "text-button danger"));
+    } else {
+      const up = button("Move message up", () => moveSchemaMessage(selectedMessage, -1)); up.disabled = selectedMessage === 0;
+      const down = button("Move message down", () => moveSchemaMessage(selectedMessage, 1)); down.disabled = selectedMessage === definition.messages.length - 1;
+      actions.append(up, down, button("Delete message", () => deleteSchemaMessage(selectedMessage), "text-button danger"));
+    }
     target.append(el("hr", "section-divider"), actions);
   }
 }
+function moveSchemaMessage(index, direction) {
+  const definition = selectedDefinition(), next = index + direction;
+  if (!Array.isArray(definition?.messages) || next < 0 || next >= definition.messages.length) return;
+  schemaChange("move message", () => {
+    [definition.messages[index], definition.messages[next]] = [definition.messages[next], definition.messages[index]];
+    for (const output of draftOutputs()) {
+      if (output.mapping?.schema !== selectedSchema) continue;
+      if (output.mapping.message === index) output.mapping.message = next;
+      else if (output.mapping.message === next) output.mapping.message = index;
+    }
+    selectedMessage = next; selectedIndex = null;
+  });
+}
+function deleteSchemaMessage(index) {
+  const definition = selectedDefinition();
+  if (!Array.isArray(definition?.messages)) return;
+  schemaChange("delete message", () => {
+    definition.messages.splice(index, 1);
+    for (const output of draftOutputs()) {
+      if (output.mapping?.schema !== selectedSchema || !Number.isInteger(output.mapping.message)) continue;
+      if (output.mapping.message === index) { delete output.mapping.message; output.enabled = false; }
+      else if (output.mapping.message > index) output.mapping.message--;
+    }
+    selectedMessage = selectedIndex = null;
+  });
+}
 function guidedAddSchema() {
   schemaChange("new schema (also removes its outputs)", () => {
-    const schema = {id: uid("schema"), document: {format: "vmf-schema/1", envelope: "C", messages: []}};
+    const schema = {id: uid("schema"), document: {format: "vmf-schema/1", messages: []}};
     workspace.schemas.push(schema); selectedSchema = schema.id; selectedMessage = selectedIndex = null; schemaExplanation = "";
   });
 }
@@ -1202,12 +1230,23 @@ function canonical(value) {
   if (Array.isArray(value)) return "[" + value.map(canonical).join(",") + "]";
   return "{" + Object.keys(value).sort().map(key => JSON.stringify(key) + ":" + canonical(value[key])).join(",") + "}";
 }
-function messageIdentity(message) { return canonical(message.identity || message.header?.fields?.messages?.[0]?.id); }
-function outputFor(schema, message) { return workspace.outputs.find(out => out.mapping?.schema === schema && canonical(out.mapping?.vmf_header?.fields?.messages?.[0]?.id) === messageIdentity(message)); }
-function outputMessage(output) {
-  const schema = catalogSchema(output.mapping?.schema);
-  return schema?.messages?.find(msg => canonical(output.mapping?.vmf_header?.fields?.messages?.[0]?.id) === messageIdentity(msg));
+function messageOutputs(schema, message) {
+  return draftOutputs().filter(output => output.mapping?.schema === schema && output.mapping?.message === message.ordinal);
 }
+function activeOutput() {
+  const wireOutput = selectedWire?.slice(0, selectedWire.lastIndexOf(":"));
+  return draftOutputs().find(output => output.id === selectedOutput || output.id === wireOutput);
+}
+function outputFor(schema, message) {
+  const outputs = messageOutputs(schema, message), active = activeOutput();
+  return outputs.includes(active) ? active : outputs.length === 1 ? outputs[0] : null;
+}
+function outputMessage(output) {
+  if (!Number.isInteger(output?.mapping?.message) || output.mapping.message < 0) return undefined;
+  return catalogSchema(output.mapping.schema)?.messages?.find(message => message.ordinal === output.mapping.message);
+}
+function outputVariant(output) { return outputMessage(output)?.profiles?.[output.mapping?.envelope]; }
+function outputReady(output) { return envelopeProfiles.includes(output.mapping?.envelope) && outputVariant(output)?.available === true; }
 function rememberActivity(data) {
   if (data && (!latestActivity || data.sequence >= latestActivity.sequence)) latestActivity = data;
 }
@@ -1325,23 +1364,34 @@ function renderFeedback() {
     node.dataset.feedbackOutput === focusedOutput)?.focus({preventScroll: true});
 }
 function selectOutput(id) {
-  selectedOutput = id; selectedWire = null;
+  selectedOutput = id; selectedWire = null; pendingMessage = null;
   renderOutputs(); renderMappingEditor(); scheduleWires();
 }
 function inspectMessage(schema, message) {
   const existing = outputFor(schema, message);
-  const output = existing || ensureOutput(schema, message, false);
-  if (!existing) changed();
-  selectOutput(output.id);
-}
-function ensureOutput(schema, message, enabled = true) {
-  let output = outputFor(schema, message);
-  if (!output) {
-    output = {id: uid("output"), enabled, mapping: {format: "cot-vmf-mapping-config/1", schema, vmf_header: clone(message.header), fields: []}};
-    workspace.outputs.push(output);
+  if (existing) return selectOutput(existing.id);
+  if (!messageOutputs(schema, message).length) {
+    const output = createOutput(schema, message); changed(); return selectOutput(output.id);
   }
-  return output;
+  selectedOutput = selectedWire = null; pendingMessage = {schema, ordinal: message.ordinal};
+  renderOutputs(); renderMappingEditor();
 }
+function createOutput(schema, message) {
+  const output = {id: uid("output"), enabled: false, mapping: {format: "cot-vmf-mapping-config/1", schema, message: message.ordinal, fields: []}};
+  workspace.outputs.push(output); return output;
+}
+function ensureOutput(schema, message) {
+  const output = outputFor(schema, message);
+  if (output) return output;
+  if (messageOutputs(schema, message).length) {
+    pendingMessage = {schema, ordinal: message.ordinal}; selectedOutput = selectedWire = null;
+    renderOutputs(); renderMappingEditor();
+    messageNotice("Choose an output for this message before connecting another field.");
+    return null;
+  }
+  return createOutput(schema, message);
+}
+function messageNotice(text) { $("toast").hidden = false; $("toast").textContent = text; $("toast").classList.remove("error"); }
 function mappingTarget(field) { return {index: field.index}; }
 function refMatches(reference, field) { return isObject(reference) && (reference.key !== undefined ? reference.key === field.key : String(Array.isArray(reference.index) ? reference.index.join(".") : reference.index).replace(/\.$/, "") === field.index.replace(/\.$/, "")); }
 function findField(schemaId, message, reference) { return (message.fields || []).find(field => refMatches(reference, field)); }
@@ -1381,7 +1431,8 @@ function selectSource(source, event) {
     const dot = event.currentTarget.querySelector(".port-dot").getBoundingClientRect();
     pointerPosition = event.detail ? {x: event.clientX, y: event.clientY}
       : {x: dot.right + 45, y: dot.y + dot.height / 2};
-    selectedWire = selectedOutput = null;
+    const output = activeOutput();
+    selectedWire = null; selectedOutput = output?.id || null;
     renderOutputs(); renderMappingEditor();
   } else pointerPosition = null;
   updatePendingConnection();
@@ -1395,6 +1446,7 @@ function connectTarget(port) {
 }
 function connect(sourcePath, schemaId, msg, field) {
   const output = ensureOutput(schemaId, msg);
+  if (!output) return false;
   if (["fields", "vmf_constants"].some(key => output.mapping[key] !== undefined && !Array.isArray(output.mapping[key]))) {
     selectOutput(output.id);
     message("Repair the mapping collections in this output before adding connections.", true); return false;
@@ -1420,9 +1472,12 @@ function renderOutputs() {
     const enable = el("label", "output-enable"), toggle = el("input");
     toggle.type = "checkbox"; toggle.checked = !!output.enabled;
     toggle.setAttribute("aria-label", "Enable output " + output.id);
+    toggle.disabled = !output.enabled && !outputReady(output);
     toggle.addEventListener("change", () => { output.enabled = toggle.checked; changed(); renderMapping(); });
     enable.append(toggle, "Send"); row.append(select, enable);
+    row.append(el("small", "output-profile", output.mapping?.envelope || "Choose envelope"));
     if (!outputMessage(output)) row.append(el("span", "output-unresolved", "Unresolved reference"));
+    else if (output.mapping?.envelope && !outputVariant(output)?.available) row.append(el("span", "output-unresolved", "Envelope unavailable"));
     list.append(row);
   }
 }
@@ -1461,8 +1516,9 @@ function renderMapping() {
       const box = el("section", "message-group"), heading = el("div", "message-heading"), output = outputFor(schema.id, msg);
       const title = button("", () => inspectMessage(schema.id, msg), "message-info");
       title.append(el("strong", "", msg.message_number || msg.label), el("small", "", msg.label || "Exact native message identity"));
-      const enable = el("label", "message-enable"), toggle = el("input"); toggle.type = "checkbox"; toggle.checked = !!output?.enabled; toggle.setAttribute("aria-label", "Enable " + schema.id + " " + msg.message_number);
-      toggle.addEventListener("change", () => { ensureOutput(schema.id, msg).enabled = toggle.checked; changed(); renderOutputs(); }); enable.append(toggle, "Send"); heading.append(title, enable); box.append(heading);
+      const addOutput = button("+ Output", () => { const next = createOutput(schema.id, msg); changed(); renderOutputs(); selectOutput(next.id); }, "text-button");
+      addOutput.setAttribute("aria-label", "Add output for " + schema.id + " message " + msg.ordinal);
+      heading.append(title, addOutput); box.append(heading);
       for (const field of msg.fields || []) {
         const port = button("", () => {
           if (armedSource && field.mappable) connect(armedSource, schema.id, msg, field);
@@ -1542,16 +1598,55 @@ function renderMappingEditor() {
     target.append(el("div", "selected-target", wire.binding.cot + " → " + wire.field.index), editor(wire.binding, bindingSpec, next => { wire.output.mapping.fields[wire.index] = next; }, "", "wire/" + wire.id), button("Remove connection", removeSelectedConnection, "button wide-button danger"));
     return;
   }
-  const output = workspace.outputs.find(item => item.id === selectedOutput);
+  const output = draftOutputs().find(item => item.id === selectedOutput);
   if (output) {
     $("mapping-inspector-title").textContent = "Message output";
-    const envelope = schemaById(output.mapping?.schema)?.document.envelope || "C";
-    const spec = object({format: enumeration("cot-vmf-mapping-config/1"), name: text, schema: text, vmf_header: headerSpec(envelope), fields: array(bindingSpec), vmf_constants: array(constantSpec), presence: array(object({group: integer, occurrences: array(occurrenceSpec), present: boolean}, ["group", "present"])), repeat_counts: array(object({repeat: integer, occurrences: array(occurrenceSpec), count: integer}, ["repeat", "count"]))});
-    target.append(el("p", "property-help", "Headers select the exact message identity. Constants use raw VMF values. Indicator presence and repeat counts remain explicit."), editor(output.mapping, spec, next => { output.mapping = next; }, "", "output/" + output.id), button("Remove output", () => { workspace.outputs.splice(workspace.outputs.indexOf(output), 1); selectedOutput = null; changed(); renderMapping(); renderMappingEditor(); }, "button wide-button danger"));
+    const profile = output.mapping?.envelope;
+    if (isObject(output.mapping)) {
+      const row = el("div", "property output-envelope"), label = el("label", "property-label", "Envelope"), choice = el("select");
+      label.append(helpButton("envelope", mappingPropertyHelp.envelope));
+      choice.dataset.property = "envelope"; choice.setAttribute("aria-label", "Output envelope");
+      choice.add(new Option("Choose envelope…", ""));
+      for (const name of envelopeProfiles) {
+        const variant = outputMessage(output)?.profiles?.[name];
+        const option = new Option(name + (variant?.available ? "" : " · unavailable"), name);
+        option.disabled = !variant?.available && profile !== name;
+        choice.add(option);
+      }
+      if (profile !== undefined && !envelopeProfiles.includes(profile)) choice.add(new Option("Saved selection: " + String(profile), String(profile)));
+      choice.value = profile === undefined ? "" : String(profile);
+      choice.addEventListener("change", () => {
+        if (choice.value) output.mapping.envelope = choice.value;
+        else { delete output.mapping.envelope; output.enabled = false; }
+        changed(); renderMapping(); renderMappingEditor();
+      });
+      row.append(label, choice); target.append(row);
+      const variant = outputVariant(output);
+      if (variant?.available) {
+        const preview = el("details", "derived-header");
+        preview.open = true;
+        preview.append(el("summary", "", "Derived message identity"), el("pre", "derived-identity", json(variant.identity, true)));
+        target.append(preview);
+      } else target.append(el("p", "schema-invalid", profile ? variant?.diagnostic || "This envelope is unavailable for the selected message." : "Choose an envelope before enabling this output."));
+    }
+    const spec = object({format: enumeration("cot-vmf-mapping-config/1"), name: text, schema: text, message: integer, envelope: enumeration(...envelopeProfiles), vmf_header: headerSpec(profile), fields: array(bindingSpec), vmf_constants: array(constantSpec), presence: array(object({group: integer, occurrences: array(occurrenceSpec), present: boolean}, ["group", "present"])), repeat_counts: array(object({repeat: integer, occurrences: array(occurrenceSpec), count: integer}, ["repeat", "count"]))});
+    spec.hidden = ["envelope"]; spec.refreshOn = ["schema", "message"];
+    target.append(el("p", "property-help", "The schema, message ordinal, and chosen envelope determine the read-only identity. Header metadata is optional. Constants use raw VMF values."), editor(output.mapping, spec, next => { output.mapping = next; }, "", "output/" + output.id), button("Remove output", () => { workspace.outputs.splice(workspace.outputs.indexOf(output), 1); selectedOutput = pendingMessage = null; changed(); renderMapping(); renderMappingEditor(); }, "button wide-button danger"));
     return;
   }
+  if (pendingMessage) {
+    const payload = catalogSchema(pendingMessage.schema)?.messages?.find(item => item.ordinal === pendingMessage.ordinal);
+    if (payload) {
+      $("mapping-inspector-title").textContent = "Choose an output";
+      target.append(el("p", "property-help", "Several outputs use this payload. Select the one to edit or connect."));
+      for (const item of messageOutputs(pendingMessage.schema, payload)) target.append(button(outputLabel(item) + " · " + (item.mapping?.envelope || "Choose envelope"), () => selectOutput(item.id), "button wide-button"));
+      target.append(button("+ Add output", () => { const next = createOutput(pendingMessage.schema, payload); changed(); renderOutputs(); selectOutput(next.id); }, "button wide-button"));
+      return;
+    }
+    pendingMessage = null;
+  }
   $("mapping-inspector-title").textContent = "Make a connection";
-  target.append(el("p", "empty-hint", "Drag a CoT source port to a VMF field, or select the two ports. Select a wire for transformations and occurrence selectors. Select a message heading for headers, constants, and structural controls."));
+  target.append(el("p", "empty-hint", "Drag a CoT source port to a VMF field, or select the two ports. Choose an output when a payload has several. New outputs remain disabled until you choose an envelope and enable them."));
 }
 function workspaceNeedsRepair() {
   return workspace.format !== "cot-vmf-workspace/1"
@@ -1670,7 +1765,7 @@ $("export-schema").addEventListener("click", () => { const schema = schemaById(s
 $("delete-schema").addEventListener("click", guidedDeleteSchema);
 $("reload").addEventListener("click", async () => {
   if (saving) return;
-  try { clearTimeout(saveTimer); state = await request("/api/state"); workspace = state.draft; resetSchemaHistory(); generation = savedGeneration = 0; selectedWire = selectedOutput = null; message(""); status(); render(); } catch (error) { message(error.message, true); }
+  try { clearTimeout(saveTimer); state = await request("/api/state"); workspace = state.draft; resetSchemaHistory(); generation = savedGeneration = 0; selectedWire = selectedOutput = pendingMessage = null; message(""); status(); render(); } catch (error) { message(error.message, true); }
 });
 attachStaticHelp();
 document.querySelector(".mapping-toolbar strong").after(helpButton(

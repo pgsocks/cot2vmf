@@ -22,6 +22,10 @@ Feature: Continuous CoT translation through UDP
     When the "translation" service workflow is exercised
     Then all service assertions succeed
 
+  Scenario: Share one payload definition across four envelope outputs
+    When the "portable-envelopes" service workflow is exercised
+    Then all service assertions succeed
+
   Scenario: Reject a configuration that cannot fit in restorable saved state
     When the "persistence-size" service workflow is exercised
     Then all service assertions succeed

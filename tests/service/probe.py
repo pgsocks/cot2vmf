@@ -44,18 +44,15 @@ def fixture():
         {"index_number": "3.", "key": "identifier", "number_of_bits": 224,
          "encode_type": "literal"},
     ]
-    schema = {"format": "vmf-schema/1", "envelope": "C",
-              "standard_version": 0, "messages": [
+    schema = {"format": "vmf-schema/1",
+              "message_standard": "MIL-STD-6017B", "messages": [
                   {"message_number": f"K01.{n}", "indexes": indexes}
                   for n in (1, 2)]}
     outputs = []
     for n in (1, 2):
         outputs.append({"id": f"position-{n}", "enabled": True, "mapping": {
             "format": "cot-vmf-mapping-config/1", "schema": "synthetic",
-            "vmf_header": {"fields": {"messages": [{"id": {
-                "user_message_format": 2, "standard_version": 0,
-                "identification": {"functional_area": 1,
-                                   "message_number": n}}}]}},
+            "message": n - 1, "envelope": "C",
             "fields": [
                 {"cot": "point.latitude", "vmf": {"key": "latitude"}},
                 {"cot": "point.longitude", "vmf": {"key": "longitude"}},
@@ -662,6 +659,40 @@ def translation(binary, root):
     try:
         changed = service.packets()
         assert changed[0] != original[0] and changed[1] == original[1]
+    finally:
+        service.close()
+
+
+def portable_envelopes(binary, root):
+    document = fixture()
+    document["schemas"][0]["document"]["messages"] = [
+        document["schemas"][0]["document"]["messages"][0]]
+    original_schema = copy.deepcopy(document["schemas"])
+    base = document["outputs"][0]["mapping"]
+    document["outputs"] = [
+        {"id": "position-" + profile, "enabled": True,
+         "mapping": dict(copy.deepcopy(base), message=0, envelope=profile)}
+        for profile in ("B", "C", "D", "D1")]
+    config = root.parent / "portable.json"
+    config.write_text(json.dumps(document))
+    command(binary, "validate", config)
+
+    bits = []
+    for value, width in [(125000, 32), ((-250000) & 0xffffffff, 32)]:
+        bits.extend((value >> i) & 1 for i in range(width))
+    for value in b"synthetic-service\x7f":
+        bits.extend((value >> i) & 1 for i in range(7))
+    bits.extend([0] * ((-len(bits)) % 8))
+    payload = bytes(sum(bits[i + j] << j for j in range(8))
+                    for i in range(0, len(bits), 8))
+    service = Service(binary, root, config)
+    try:
+        wires = service.packets(4)
+        assert [wire[0] & 15 for wire in wires] == [1, 2, 3, 4]
+        assert all(wire.endswith(payload) for wire in wires), (
+            "envelope selection changed the shared payload")
+        assert exported(binary, root, active=True)["schemas"] == original_schema
+        assert service.packets(4) == wires
     finally:
         service.close()
 
@@ -1280,6 +1311,7 @@ if __name__ == "__main__":
     with tempfile.TemporaryDirectory(prefix="cot-vmf-service-") as directory:
         root = Path(directory) / "workspace"
         {"monitor": monitor, "translation": translation,
+         "portable-envelopes": portable_envelopes,
          "configuration": configuration,
          "entrypoint-arguments": entrypoint_arguments,
          "entrypoint": entrypoint_service,

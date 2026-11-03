@@ -26,6 +26,8 @@ is an unmodified native `vmf-schema/1` object; use the VMF repository's
 [schema reference][schema] for fields, profiles, structures, and validation.
 Labels, notes, and conversion behavior are not added to that native dialect.
 All schema definitions must validate before the whole workspace can activate.
+Native schemas may omit their envelope default. Each output independently
+chooses an envelope and one message from the shared definition.
 
 An output is `{ "id": "position-out", "enabled": true, "mapping": { ... } }`.
 Disabled outputs may retain incomplete mapping objects. Each enabled output
@@ -35,15 +37,8 @@ uses the `cot-vmf-mapping-config/1` format:
 {
   "format": "cot-vmf-mapping-config/1",
   "schema": "position",
-  "vmf_header": {
-    "fields": {
-      "messages": [{"id": {
-        "user_message_format": 2,
-        "standard_version": 0,
-        "identification": {"functional_area": 1, "message_number": 1}
-      }}]
-    }
-  },
+  "message": 0,
+  "envelope": "D1",
   "fields": [
     {"cot": "point.latitude", "vmf": {"key": "latitude"}}
   ]
@@ -51,11 +46,30 @@ uses the `cot-vmf-mapping-config/1` format:
 ```
 
 Here `schema` names a workspace id, never a filesystem path. An enabled
-mapping selects one body using an exact native header identity. Standard and
-subtype presence/value participate in identity; the K-number alone does not
-identify every payload. The GUI derives the initial header from the native
-catalog. Header options follow VMF's [header JSON contract][header]. The author
-API derives lengths; authentication generation and compression are unsupported.
+mapping requires a zero-based integer `message` position within that schema's
+messages array and an explicit `envelope`: `B`, `C`, `D`, or `D1`. There is no
+fallback to the schema default. Reordering an externally edited messages array
+requires updating its mapping ordinals. Browser message moves and deletion
+adjust surviving references; deleting a selected message disables and clears
+the affected selection. Undo restores both definitions and references.
+
+Each output binds only its chosen message, borrowing the original canonical
+definitions. Unrelated messages cannot prevent that output from using an
+envelope. The native library resolves the effective payload edition and subtype
+to the exact header identity. Named MIL-STD-6017B uses code 8 under C, code 7
+under D/D1, and no version under B. Explicit ordinals can select either of two
+editions whose header identities would otherwise coincide under B. Raw codes
+retain their source-profile restrictions; unsupported selected editions and
+absent VMF versions under D/D1 fail validation.
+
+Optional `vmf_header` supplies native header metadata, such as originator,
+recipients, precedence, or classification. Omitted fields and the sole message
+descriptor receive native defaults. Supplied containers must have the proper
+types, and a supplied messages array must contain exactly one body descriptor.
+Caller-supplied `id` is rejected, including null or an otherwise matching value;
+the service generates it from the selected message and envelope. Header options
+follow VMF's [header JSON contract][header]. The author API derives lengths;
+authentication generation and compression are unsupported.
 
 ## Bindings and values
 

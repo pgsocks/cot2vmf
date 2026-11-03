@@ -14,7 +14,8 @@ reports CoT reception and sends no VMF.
 
 ## Build and run
 
-Linux, CMake 3.24+, Git, and a C11/C++17 GCC or Clang toolchain are required.
+Linux, CMake 3.24+, Git, `patch`, and a C11/C++17 GCC or Clang toolchain are
+required.
 Initial builds fetch pinned dependencies through CPM.
 
 ```sh
@@ -28,7 +29,10 @@ build/src/cot-to-vmf run --workspace ./workspace \
 
 Open `http://127.0.0.1:8080`. Create or import schemas in **Schemas**, then
 connect standard CoT fields to VMF fields in **Mapping**. Enable the desired
-outputs. Valid edits activate immediately; invalid drafts retain the previous
+outputs after selecting each output's message and envelope. New browser outputs
+start disabled. One payload definition can serve independent B/C/D/D1 outputs;
+header identity is generated from the selected message and profile. Valid edits
+activate immediately; invalid drafts retain the previous
 active configuration. The workspace preserves both across restart.
 
 To start with the synthetic two-output example:
@@ -57,6 +61,9 @@ options. Restart uses the saved active workspace. `--help` lists commands and
 startup options. The `headless` preset omits web support; the `release` preset
 builds production
 artifacts without test tooling.
+
+Workspace and mapping documents use format version 1. Embedded native payload
+documents use `vmf-schema/1`.
 
 ## Docker and background operation
 

@@ -61,9 +61,10 @@ bool bridge_vmf_encode(bridge_context *ctx)
 	ctx->error_code = "vmf_encode";
 	vmf_author_options options =
 	    vmf_author_options_for_schemas(ctx->schemas);
+	options.codec.profile = ctx->profile;
 	vmf_envelope_event envelope = {
-	    static_cast<uint8_t>(ctx->schemas->envelope), &ctx->header,
-	    vmf_header_layout(ctx->schemas->envelope).size, VMF_LENGTH_UNKNOWN,
+	    static_cast<uint8_t>(ctx->profile), &ctx->header,
+	    vmf_header_layout(ctx->profile).size, VMF_LENGTH_UNKNOWN,
 	    VMF_LENGTH_UNKNOWN};
 	vmf_author_error error = {};
 	vmf_status status =
@@ -88,8 +89,9 @@ bool bridge_vmf_encode(bridge_context *ctx)
 			index = scope.controller;
 		bridge_location(ctx, "", -1, index, &selector);
 		return bridge_fail(
-		    ctx, "VMF %s; descriptor %zu, bit %llu",
-		    vmf_status_string(status), error.descriptor_index,
+		    ctx, "VMF %s; message %zu, descriptor %zu, bit %llu",
+		    vmf_status_string(status), ctx->message_ordinal,
+		    error.descriptor_index,
 		    static_cast<unsigned long long>(error.codec.offset));
 	}
 	for (size_t i = 0; i < ctx->binding_count; ++i) {

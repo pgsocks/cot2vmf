@@ -237,8 +237,11 @@ static bool job_begin(const bridge_context *compiled,
 		      const bridge_context *received, bridge_context *job)
 {
 	*job = {};
-	job->schemas = compiled->schemas;
+	job->registry = compiled->registry;
+	job->schemas = &job->registry;
 	job->message = compiled->message;
+	job->profile = compiled->profile;
+	job->message_ordinal = compiled->message_ordinal;
 	job->header = compiled->header;
 	job->binding_count = compiled->binding_count;
 	job->control_count = compiled->control_count;

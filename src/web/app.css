@@ -1214,3 +1214,9 @@ footer {
 
 .schema-history { display: flex; align-items: center; margin-bottom: 14px; }
 .schema-history .schema-undo { flex: 1; width: auto; margin-bottom: 0; }
+
+.output-profile { color: var(--muted); font-size: 11px; padding: 4px 0; }
+.derived-header { margin: 12px 0; padding: 10px; border: 1px solid var(--line); border-radius: 6px; }
+.derived-header summary { font-size: 12px; cursor: pointer; }
+.derived-identity { font-size: 11px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.output-envelope select { width: 100%; }

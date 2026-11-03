@@ -96,6 +96,12 @@ body in one complete VMF PDU; no application fragmentation or retry occurs.
 VMF authoring validates mandatory values, structure, and ranges before any
 output callback. Never publish partial or oversized PDUs.
 
+Enabled mappings select a schema id, zero-based message ordinal, and explicit
+envelope. The compiled output retains a one-message registry view and derives
+its exact identity once. Independent outputs borrow the same original message
+and index definitions with different compatible envelopes. Optional header
+metadata never supplies an identity. See the [mapping contract](mapping.md).
+
 The native `cv_workspace_load` copies and validates an in-memory workspace.
 The immutable owner survives concurrent `cv_process` calls; the caller must
 keep it alive through every call and callback. `cv_process(NULL, ...)` provides
@@ -104,7 +110,13 @@ and return publication success. A failed output does not stop later outputs.
 Fresh job storage prevents absent source fields inheriting earlier values.
 
 `cv_catalog` supplies native source/target metadata independently of mapping
-validity, with per-schema diagnostics for invalid schemas. Its allocated JSON
+validity, with per-schema diagnostics for invalid schemas. Its
+`cot-vmf-catalog/1` messages contain `ordinal`, `label`, `message_number`, shared
+`fields`, and `profiles` keyed by `B`, `C`, `D`, and `D1`. Each profile contains
+`available`, `diagnostic`, `identity`, and a native `header` preview. Unavailable
+variants retain the message fields and have null identity/header values.
+Compatibility is checked using only the selected message. Header previews and
+identities are read-only metadata, not mapping inputs. Its allocated JSON
 buffer is released with `cv_buffer_destroy`. All public functions report
 status values; none throws. The header specifies nullable arguments, size
 limits, failure output states, reentrancy, and release obligations.

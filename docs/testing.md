@@ -7,8 +7,8 @@ failure propagation and cleanup separately from product coverage.
 
 ## Native checks
 
-Linux, CMake 3.24+, Git, and GCC or Clang are required. Acceptance checks also
-need Python 3, Ruby, Bundler, `patch`, and the locked gems.
+Linux, CMake 3.24+, Git, `patch`, and GCC or Clang are required. Acceptance
+checks also need Python 3, Ruby, Bundler, and the locked gems.
 
 ```sh
 bundle install
@@ -44,8 +44,14 @@ entries paired; multi-configuration generators also need matching
 The core tests cover exact numeric domains/scaling, text/binary encodings,
 repeat/presence controls, all envelope profiles, ownership, concurrent reads,
 output isolation, catalog metadata, and UDP size limits. Service scenarios
-cover receive-only behavior, malformed input recovery, multiple outputs,
-reloads, optimistic edits, activity, persistence, and restart recovery.
+send one unchanged portable payload through four simultaneous envelope
+outputs. Tests cover message selection boundaries, generated identities, raw origins,
+unrelated incompatible editions, per-profile catalog diagnostics, and explicit
+B selection of otherwise colliding editions. Browser checks cover independent
+output profiles, disabled new outputs, and ordinal references through Undo.
+Service scenarios also cover receive-only behavior, malformed input recovery,
+multiple outputs, reloads, optimistic edits, activity, persistence, and restart
+recovery.
 CLI scenarios cover offline imports and edits, export and validation, invalid
 draft retention, runtime-only options, workspace selection, and writer locking.
 Entrypoint scenarios exercise runtime overrides and one-time seeding without

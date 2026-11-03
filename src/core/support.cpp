@@ -139,7 +139,7 @@ vmf_author_address bridge_address(bridge_context *ctx,
 
 vmf_header_fields *bridge_header_fields(bridge_context *ctx)
 {
-	switch (ctx->schemas->envelope) {
+	switch (ctx->profile) {
 	case VMF_ENVELOPE_B:
 		return &ctx->header.b.fields;
 	case VMF_ENVELOPE_C:
@@ -148,6 +148,21 @@ vmf_header_fields *bridge_header_fields(bridge_context *ctx)
 		return &ctx->header.d.fields;
 	case VMF_ENVELOPE_D1:
 		return &ctx->header.d1.fields;
+	default:
+		return nullptr;
 	}
-	return nullptr;
+}
+
+vmf_schema_set bridge_message_view(const vmf_schema_set *source,
+				 size_t ordinal)
+{
+	if (!source || !source->messages || ordinal >= source->message_count)
+		return {};
+	const vmf_message_schema *message = source->messages + ordinal;
+	vmf_standard_selection standard = message->standard.kind ==
+		VMF_STANDARD_INHERIT ? source->standard : message->standard;
+
+	if (standard.kind == VMF_STANDARD_INHERIT)
+		standard.kind = VMF_STANDARD_ABSENT;
+	return {source->envelope, message, 1, standard};
 }

@@ -22,6 +22,22 @@ workflow without introducing routing predicates. A failed plan suppresses its
 PDU while subsequent plans continue. One body per datagram keeps failure and
 publication boundaries explicit.
 
+Output plans select message ordinals and envelope profiles independently of
+schema defaults. A plan owns a single-message registry view that borrows the
+original canonical descriptors and materializes that message's effective
+standard selection. This avoids making unrelated editions gate an output,
+while retaining native raw-code origin and profile validation. Header identity
+is generated before native header loading and complete-message authoring;
+the translator does not implement another identity-to-wire mapping.
+
+The catalog retains canonical message fields once and reports separate
+availability, identities, and header previews for all four profiles. Browser
+outputs are identified by their own ids, so several outputs can use one message
+without collapsing profiles with equal wire identities. User metadata stays
+separate from generated defaults. Message deletion and moves update ordinal
+references and schema history together; external files use their explicit
+message positions.
+
 The optional GUI is embedded so Docker and offline runtime installations need
 only the executable and user workspace. CivetWeb's C API, pinned through CPM,
 keeps HTTP parsing out of application code. Assets use ordinary DOM/SVG and no

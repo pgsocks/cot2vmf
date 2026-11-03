@@ -547,13 +547,13 @@ static bool mapping_config_properties(bridge_context *ctx)
 {
 	yyjson_val *root = yyjson_doc_get_root(ctx->config);
 	static const char *const allowed[] = {
-	    "format", "name",	       "schema",   "vmf_header",
+	    "format", "name", "schema", "message", "envelope", "vmf_header",
 	    "fields", "vmf_constants", "presence", "repeat_counts"};
 
-	if (!keys(ctx, root, allowed, 8))
+	if (!keys(ctx, root, allowed, 10))
 		return false;
 	if (!yyjson_equals_str(yyjson_obj_get(root, "format"),
-			       "cot-vmf-mapping-config/1"))
+				       "cot-vmf-mapping-config/1"))
 		return bridge_fail(ctx,
 				   "expected format cot-vmf-mapping-config/1");
 	yyjson_val *name = yyjson_obj_get(root, "name");
@@ -565,6 +565,112 @@ static bool mapping_config_properties(bridge_context *ctx)
 	if (!string(schema_path))
 		return bridge_fail(
 		    ctx, "schema must name a workspace schema");
+	uint64_t ordinal = 0;
+
+	bridge_location(ctx, "/message", -1, nullptr, nullptr);
+	if (!uint_value(yyjson_obj_get(root, "message"), &ordinal) ||
+	    ordinal > SIZE_MAX)
+		return bridge_fail(ctx, "message must be a zero-based integer");
+	ctx->message_ordinal = static_cast<size_t>(ordinal);
+	yyjson_val *envelope = yyjson_obj_get(root, "envelope");
+	static const char *const names[] = {"B", "C", "D", "D1"};
+
+	bridge_location(ctx, "/envelope", -1, nullptr, nullptr);
+	for (size_t i = 0; string(envelope) && i < 4; ++i)
+		if (yyjson_equals_str(envelope, names[i])) {
+			ctx->profile = static_cast<vmf_envelope_version>(i + 1);
+			return true;
+		}
+	return bridge_fail(ctx, "envelope must be B, C, D or D1");
+}
+
+static bool mapping_header(bridge_context *ctx, yyjson_val *value,
+			   const vmf_message_id *identity)
+{
+	if (value && !yyjson_is_obj(value))
+		return bridge_fail(ctx, "vmf_header must be an object");
+	yyjson_val *fields = yyjson_obj_get(value, "fields");
+
+	if (fields && !yyjson_is_obj(fields))
+		return bridge_fail(ctx, "vmf_header.fields must be an object");
+	yyjson_val *messages = yyjson_obj_get(fields, "messages");
+
+	if (messages &&
+	    (!yyjson_is_arr(messages) || yyjson_arr_size(messages) != 1))
+		return bridge_fail(ctx, "exactly one message is required");
+	yyjson_val *message = yyjson_arr_get(messages, 0);
+
+	if (message && !yyjson_is_obj(message))
+		return bridge_fail(ctx, "message metadata must be an object");
+	if (yyjson_obj_get(message, "id"))
+		return bridge_fail(ctx, "message identity is derived, not metadata");
+	vmf_header_json_options options = vmf_header_json_default_options();
+	vmf_header_json_text *text = nullptr;
+	vmf_status status = vmf_header_json_template(ctx->profile, identity, 1,
+		&options, &text, nullptr);
+
+	if (status != VMF_OK)
+		return bridge_fail(ctx, "message %zu header template: %s",
+			ctx->message_ordinal, vmf_status_string(status));
+	yyjson_doc *generated = yyjson_read(vmf_header_json_text_data(text),
+		vmf_header_json_text_size(text), 0);
+	yyjson_val *generated_fields = yyjson_obj_get(
+		yyjson_doc_get_root(generated), "fields");
+	yyjson_val *generated_message = yyjson_arr_get(
+		yyjson_obj_get(generated_fields, "messages"), 0);
+	yyjson_val *generated_id = yyjson_obj_get(generated_message, "id");
+	yyjson_mut_doc *document = yyjson_mut_doc_new(nullptr);
+	yyjson_mut_val *root = document ? (value ?
+		yyjson_val_mut_copy(document, value) :
+		yyjson_mut_obj(document)) : nullptr;
+	yyjson_mut_val *target_fields = yyjson_mut_obj_get(root, "fields");
+	bool valid = root && generated_id;
+
+	if (valid && !target_fields) {
+		target_fields = yyjson_mut_obj(document);
+		valid = target_fields && yyjson_mut_obj_add_val(document, root,
+			"fields", target_fields);
+	}
+	yyjson_mut_val *target_messages = yyjson_mut_obj_get(target_fields,
+		"messages");
+
+	if (valid && !target_messages) {
+		target_messages = yyjson_mut_arr(document);
+		yyjson_mut_val *descriptor = yyjson_mut_obj(document);
+
+		valid = target_messages && descriptor &&
+			yyjson_mut_arr_add_val(target_messages, descriptor) &&
+			yyjson_mut_obj_add_val(document, target_fields, "messages",
+				target_messages);
+	}
+	yyjson_mut_val *target_id = valid ?
+		yyjson_val_mut_copy(document, generated_id) : nullptr;
+
+	valid = valid && target_id && yyjson_mut_obj_add_val(document,
+		yyjson_mut_arr_get(target_messages, 0), "id", target_id);
+	if (valid)
+		yyjson_mut_doc_set_root(document, root);
+	size_t size = 0;
+	char *json = valid ? yyjson_mut_write(document, 0, &size) : nullptr;
+
+	yyjson_mut_doc_free(document);
+	yyjson_doc_free(generated);
+	vmf_header_json_text_destroy(text);
+	if (!json)
+		return bridge_fail(ctx, "cannot prepare message header");
+	vmf_header_json_error error = {};
+
+	status = vmf_header_json_load(ctx->profile, json, size, &options,
+		&ctx->header_owner, &error);
+	std::free(json);
+	if (status != VMF_OK) {
+		std::snprintf(ctx->config_path, sizeof(ctx->config_path),
+			"/vmf_header%s", error.path);
+		return bridge_fail(ctx, "message %zu: %s: %s",
+			ctx->message_ordinal, error.message,
+			vmf_status_string(status));
+	}
+	ctx->header = *vmf_header_json_header(ctx->header_owner);
 	return true;
 }
 
@@ -574,45 +680,37 @@ static bool configure_mapping_config(bridge_context *ctx)
 
 	if (!ctx->schemas)
 		return bridge_fail(ctx, "upload a VMF schema first");
+	bridge_location(ctx, "/message", -1, nullptr, nullptr);
+	ctx->registry = bridge_message_view(ctx->schemas, ctx->message_ordinal);
+	if (!ctx->registry.messages)
+		return bridge_fail(ctx, "message %zu is outside the schema list",
+			ctx->message_ordinal);
+	ctx->schemas = &ctx->registry;
+	ctx->message = ctx->registry.messages;
+	vmf_message_id identity = {};
+	vmf_status status = vmf_schema_message_id_for_profile(ctx->schemas,
+		ctx->message, ctx->profile, &identity);
+
+	if (status != VMF_OK)
+		return bridge_fail(ctx, "message %zu cannot use envelope %s: %s",
+			ctx->message_ordinal,
+			yyjson_get_str(yyjson_obj_get(root, "envelope")),
+			vmf_status_string(status));
 	ctx->error_code = "header_invalid";
 	bridge_location(ctx, "/vmf_header", -1, nullptr, nullptr);
-	size_t header_size = 0;
-	char *header_json = yyjson_val_write(yyjson_obj_get(root, "vmf_header"),
-					     0, &header_size);
-
-	if (!header_json)
-		return bridge_fail(ctx, "vmf_header must be supplied");
-	vmf_header_json_options header_options =
-	    vmf_header_json_default_options();
-	vmf_header_json_error header_error = {};
-	vmf_status status = vmf_header_json_load(
-	    ctx->schemas->envelope, header_json, header_size, &header_options,
-	    &ctx->header_owner, &header_error);
-
-	std::free(header_json);
-	if (status != VMF_OK) {
-		std::snprintf(ctx->config_path, sizeof(ctx->config_path),
-			      "/vmf_header%s", header_error.path);
-		return bridge_fail(ctx, "%s: %s", header_error.message,
-				   vmf_status_string(status));
-	}
-	ctx->header = *vmf_header_json_header(ctx->header_owner);
+	if (!mapping_header(ctx, yyjson_obj_get(root, "vmf_header"), &identity))
+		return false;
 	vmf_header_fields *header = bridge_header_fields(ctx);
 
 	if (header->message_count != 1 || !header->messages[0].has_body)
 		return bridge_fail(
 		    ctx, "exactly one VMF body descriptor is required");
-	status = vmf_schema_select(ctx->schemas, &header->messages[0].id,
-				   &ctx->message);
-	if (status != VMF_OK)
-		return bridge_fail(ctx,
-				   "header identity has no exact schema: %s",
-				   vmf_status_string(status));
 	vmf_author_options author_options =
 	    vmf_author_options_for_schemas(ctx->schemas);
+	author_options.codec.profile = ctx->profile;
 	vmf_envelope_event envelope = {
-	    static_cast<uint8_t>(ctx->schemas->envelope), &ctx->header,
-	    vmf_header_layout(ctx->schemas->envelope).size, VMF_LENGTH_UNKNOWN,
+	    static_cast<uint8_t>(ctx->profile), &ctx->header,
+	    vmf_header_layout(ctx->profile).size, VMF_LENGTH_UNKNOWN,
 	    VMF_LENGTH_UNKNOWN};
 	vmf_author_error author_error = {};
 
@@ -621,9 +719,9 @@ static bool configure_mapping_config(bridge_context *ctx)
 	if (status != VMF_OK)
 		return bridge_fail(
 		    ctx,
-		    "header is not valid for authoring "
+		    "message %zu header is not valid for authoring "
 		    "(authentication/compression unsupported): %s",
-		    vmf_status_string(status));
+		    ctx->message_ordinal, vmf_status_string(status));
 	ctx->error_code = "mapping_config_invalid";
 	bridge_location(ctx, "", -1, nullptr, nullptr);
 	yyjson_val *fields = yyjson_obj_get(root, "fields");

@@ -88,8 +88,11 @@ struct bridge_notice {
 struct bridge_context {
 	vmf_schema_json_document *schema_owner;
 	vmf_header_json_document *header_owner;
+	vmf_schema_set registry;
 	const vmf_schema_set *schemas;
 	const vmf_message_schema *message;
+	vmf_envelope_version profile;
+	size_t message_ordinal;
 	vmf_header header;
 	yyjson_doc *config;
 	bridge_arena arena;
@@ -119,6 +122,12 @@ void bridge_note(bridge_context *ctx, const char *code, bool warning,
 void *bridge_alloc(bridge_context *ctx, size_t size);
 void bridge_arena_destroy(bridge_arena *arena);
 vmf_header_fields *bridge_header_fields(bridge_context *ctx);
+/* Borrow one message and its canonical arrays from a validated source.
+ * Materializes its effective standard while preserving the raw-code origin.
+ * The source owner outlives the view. Invalid source/bounds return a zero view.
+ */
+vmf_schema_set bridge_message_view(const vmf_schema_set *source,
+				 size_t ordinal);
 bool bridge_selector_equal(const bridge_selector *a, const bridge_selector *b);
 vmf_author_address bridge_address(bridge_context *ctx,
 				  const vmf_index_schema *index,
