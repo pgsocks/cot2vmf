@@ -121,7 +121,11 @@ static bool fields(yyjson_mut_doc *doc, yyjson_mut_val *array,
 		if (vmf_schema_index_info(schemas, message, index, &info) !=
 		    VMF_OK)
 			return false;
-		char path[768], length[768];
+		char path[768];
+		const vmf_index_schema *length_source = info.length_from.count ?
+			vmf_schema_find(message, info.length_from) : nullptr;
+		vmf_string length = length_source ? length_source->key :
+			vmf_string{nullptr, 0};
 		yyjson_mut_val *item = yyjson_mut_arr_add_obj(doc, array);
 		yyjson_mut_val *repeats = yyjson_mut_arr(doc);
 		yyjson_mut_val *groups = yyjson_mut_arr(doc);
@@ -129,7 +133,6 @@ static bool fields(yyjson_mut_doc *doc, yyjson_mut_val *array,
 
 		if (!item || !repeats || !groups || !allowed ||
 		    !index_text(index->index_number, path, sizeof(path)) ||
-		    !index_text(info.length_from, length, sizeof(length)) ||
 		    !yyjson_mut_obj_add_strcpy(doc, item, "index", path) ||
 		    !yyjson_mut_obj_add_strncpy(doc, item, "key",
 						info.key.data ? info.key.data
@@ -157,8 +160,9 @@ static bool fields(yyjson_mut_doc *doc, yyjson_mut_val *array,
 		    !yyjson_mut_obj_add_val(doc, item, "allowed", allowed) ||
 		    !yyjson_mut_obj_add_val(doc, item, "scale",
 					    scale(doc, info.scale)) ||
-		    !yyjson_mut_obj_add_strcpy(doc, item, "length_from",
-					       length) ||
+		    !yyjson_mut_obj_add_strncpy(doc, item, "length_from",
+					       length.data ? length.data : "",
+					       length.size) ||
 		    !signed_decimal(doc, item, "length_bias",
 				    info.length_bias) ||
 		    !yyjson_mut_obj_add_bool(doc, item, "conditional",

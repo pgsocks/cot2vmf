@@ -5,7 +5,7 @@ function parseJSON(source) {
   let at = 0;
   const white = () => { while (/\s/.test(source[at] || "") && at < source.length) at++; };
   function value(depth = 0) {
-    if (depth > 64) throw new Error("Document nesting exceeds 64 levels.");
+    if (depth > 256) throw new Error("Document nesting exceeds 256 levels.");
     white();
     const start = at, char = source[at];
     if (char === '"') {
@@ -243,50 +243,43 @@ const cotFieldHelp = {
 };
 
 const schemaPropertyHelp = {
-  format: "The native document format identifier. Payload definitions use vmf-schema/1.",
-  envelope: "An optional default envelope and the source profile for literal raw version codes. Each output chooses its own envelope; named payload editions retain their meaning.",
-  message_standard: "A named standard edition. It is an alternative to a raw standard_version at this level; a message-level selection replaces the schema-level selection.",
-  standard_version: "An exact raw standard-version code, or absent where the profile permits it. It is an alternative to message_standard, not an automatic latest-version choice.",
-  message_number: "The VMF K-series message number, such as K01.1. Standard-version and subtype presence also participate in the exact message identity.",
-  messages: "The message definitions supplied by this schema. The application does not supply assigned operational layouts.",
-  subtype: "The optional exact message subtype. Present zero and an absent subtype are different identities.",
-  indexes: "Fields and structural indicators in wire order. Array order determines encoding order; index numbers do not sort the definitions.",
-  index_number: "The field's numeric index address, such as 3.1. Numeric addresses with and without a trailing dot identify the same index.",
-  number_of_bits: "The fixed wire width, or the finite capacity for a variable field. Width alone does not enable text or variable-length encoding.",
-  key: "An optional application binding key, unique within this message, which a mapping can use instead of the numeric index.",
-  encode_type: "The kind of value encoded by the field. This choice determines which representation, text, length and scale properties apply.",
-  indicator: "A structural control: FPI controls one field's presence, GPI a group's presence, and FRI/GRI a repeated field or group. Indicators are one bit and are not ordinary mapping targets.",
-  target: "The field index controlled by FPI, or group ID controlled by GPI. The indicator must immediately precede its target in the logical sequence.",
-  group_code: "The field's group membership path, such as G1/G2. Group membership adds no wire bits by itself.",
-  repeat_code: "The repeat membership path, such as R1/R2. An FRI or GRI controller also declares a finite maximum, for example R1(4).",
-  representation: "The integer bit representation. Signed fields need an explicit compatible signed representation.",
-  bit_order: "The logical significance of bits within the field. This is independent of the message's physical octet packing.",
-  octet_order: "The message's physical octet packing order, independent of individual field bit significance. Overrides do not add alignment padding.",
-  text_encoding: "The encoding of text on the wire. Text capacity must be divisible by the encoding's seven- or eight-bit code-unit width.",
-  length_from: "An earlier scalar field that supplies this field's length in wire units. The reference must be available in the same or an enclosing scope.",
-  length_bias: "A checked signed adjustment to the length read from length_from. This property applies only when length_from is selected.",
-  when: "A condition over preceding scalar raw codes that determines whether this field is active.",
-  mode: "Require all condition terms to match, or at least one term to match.",
-  negate: "Invert this condition or condition term's result.",
-  terms: "The nonempty collection of raw-code tests that make up this condition.",
-  field: "The earlier scalar index tested by this condition term. Future or unavailable fields cannot supply its value.",
+  format: "The payload document identifier: vmf-schema/1.",
+  envelope: "An optional default envelope. Each output chooses its own envelope; named payload editions retain their meaning.",
+  message_standard: "The named edition of the specification you are transcribing. A message may replace this schema-level choice.",
+  standard_version: "An explicit raw standard-version code, or absent where allowed. Named editions are usually easier to use across envelopes.",
+  message_number: "The VMF K-series message number, such as K01.1, printed in your specification.",
+  messages: "The message definitions in this schema. Add fields and groups in their specified wire order.",
+  subtype: "An optional exact message subtype. Present zero and absence identify different messages.",
+  elements: "An ordered list of fields, groups, and optional or repeating structures. Nesting generates the control fields and membership automatically.",
+  number_of_bits: "The exact wire width or finite variable-field capacity, in bits. Boolean fields imply one bit.",
+  key: "A required field name, unique within its message. Dependencies and mappings use this name. Renaming in this editor updates those references together.",
+  type: "The wire data type. Signed types explicitly choose their bit representation. Scale is inferred from its metadata.",
+  bit_order: "The logical significance of bits within the field, independent of physical octet packing.",
+  octet_order: "The physical octet packing order for this message. It does not insert alignment padding.",
+  text_encoding: "The wire text encoding. Capacities must contain whole seven- or eight-bit wire units. UTF-8 units are bytes.",
+  length_from: "Choose an available earlier unsigned scalar field by key. Its value supplies this field's length in wire units.",
+  length_bias: "A checked signed adjustment to the selected length field's value.",
+  when: "A condition comparing raw codes from available earlier scalar fields. It controls this field without adding a presence bit.",
+  all: "Every condition term must match.",
+  any: "At least one condition term must match.",
+  negate: "Invert the condition or term's result.",
+  field: "Choose the available earlier scalar field whose raw code this term tests.",
   values: "Inclusive raw-code intervals that satisfy this condition term.",
-  mask: "An optional raw-bit mask applied for this condition term. Omitting it uses all raw bits.",
-  allowed: "Disjoint inclusive intervals of permitted raw wire codes. These remain raw-code constraints for signed and scaled fields.",
-  first: "The first included raw code in this interval.",
-  last: "The last included raw code in this interval.",
-  constant: "A required raw scalar code. This constrains a supplied value; it does not automatically supply a value to an output.",
-  scale: "Exact rational factor and bias describing physical_value = raw_code × factor + bias. Scaled fields require this metadata.",
-  factor: "The exact rational multiplier used by this field's scale.",
-  bias: "The exact rational offset used by this field's scale, or the checked signed adjustment to a scalar repeat count.",
+  mask: "An optional raw-bit mask applied before comparison. Omitting it uses every raw bit.",
+  allowed: "Disjoint inclusive intervals of permitted raw wire codes, including for signed and scaled fields.",
+  first: "The first included raw code.",
+  last: "The last included raw code.",
+  constant: "A required raw scalar code. The output still needs to supply that value.",
+  scale: "Exact factor and bias for physical_value = raw_code × factor + bias. Adding this metadata implies scaled encoding.",
+  factor: "The exact rational multiplier for this field's scale.",
+  bias: "The exact scale offset, or the checked signed adjustment to a scalar repeat count.",
   numerator: "The signed numerator of this exact rational value.",
-  denominator: "The unsigned, nonzero denominator of this exact rational value.",
-  sentinels: "Raw codes reserved as scale sentinel values, rather than ordinary physical measurements.",
-  repeats: "Message-level declarations for fixed or preceding-scalar repeats. A repeat cannot also have an FRI/GRI controller.",
-  count: "The fixed number of occurrences. Zero is valid for a fixed repeat.",
-  count_from: "An earlier scalar field that supplies the occurrence count. Its value is supplied normally and is not backpatched by the encoder.",
-  maximum: "The finite maximum permitted occurrence count for this repeat.",
-  minimum: "The minimum permitted count for a scalar-count repeat.",
+  denominator: "The nonzero unsigned denominator of this exact rational value.",
+  sentinels: "Raw codes reserved as scale sentinel values.",
+  count: "The explicit fixed number of occurrences, including zero.",
+  count_from: "Choose the available earlier unsigned scalar field supplying the occurrence count. Its input value remains explicit.",
+  maximum: "The finite maximum permitted occurrence count from your specification.",
+  minimum: "The minimum permitted scalar-controlled occurrence count.",
 };
 
 const mappingPropertyHelp = {
@@ -296,7 +289,7 @@ const mappingPropertyHelp = {
   message: "The zero-based ordinal of the selected message in the schema document. Message 0 is the first definition.",
   envelope: "The envelope explicitly selected for this output. Its header identity is derived from the selected payload definition.",
   cot: "The canonical CoT source path. Only standard individually mappable catalog fields can supply a connection.",
-  vmf: "The target VMF field, selected by a unique key or a numeric index within this output's exact message.",
+  vmf: "The target VMF field, selected by its unique key within this output's exact message.",
   key: "The unique application key of the target field. Select either key or index for a target reference.",
   index: "The target's numeric field address, such as 3.1, or the zero-based occurrence index inside an occurrence selector.",
   factor: "Numeric conversion uses cot_value = physical_vmf × factor + offset. The default factor is 1; encoding inverts the conversion.",
@@ -427,13 +420,14 @@ const order = enumeration("default", "lsb_first", "msb_first");
 const standards = enumeration("MIL-STD-6017", "MIL-STD-6017A", "MIL-STD-6017B", "MIL-STD-6017C", "MIL-STD-6017D", "MIL-STD-6017E", "TIDP-TE-R2", "TIDP-TE-R3", "TIDP-TE-R4", "TIDP-TE-R5", "TIDP-TE-R6", "TIDP-TE-R7", "TIDP-FTE-R6");
 const rangeSpec = object({first: integer, last: integer}, ["first", "last"]);
 const rationalSpec = object({numerator: integer, denominator: {...integer, initial: 1}}, ["numerator", "denominator"]);
-const conditionSpec = object({mode: enumeration("all", "any"), negate: boolean, terms: array(object({field: text, values: array(rangeSpec), mask: integer, negate: boolean}, ["field", "values"]))}, ["mode", "terms"]);
-const indexSpec = object({index_number: text, number_of_bits: {...integer, initial: 1}, key: text, group_code: text, repeat_code: text, encode_type: enumeration("default", "bool", "unsigned", "signed", "enum", "scaled", "bits", "octets", "text", "literal"), indicator: enumeration("none", "fpi", "gpi", "fri", "gri"), target: text, representation: enumeration("default", "unsigned", "twos_complement", "ones_complement", "sign_magnitude"), bit_order: order, text_encoding: enumeration("default", "ascii_7", "ascii_8", "latin_1", "utf_8"), length_from: text, length_bias: integer, when: conditionSpec, allowed: array(rangeSpec), constant: integer, scale: object({factor: rationalSpec, bias: rationalSpec, sentinels: array(integer)}, ["factor", "bias"])}, ["index_number", "number_of_bits"]);
-const repeatSpec = object({repeat_code: text, count: integer, count_from: text, maximum: integer, minimum: integer, bias: integer}, ["repeat_code"]);
-const nativeMessageSpec = object({message_number: text, indexes: array(indexSpec), message_standard: standards, standard_version: scalar, subtype: integer, repeats: array(repeatSpec), octet_order: order}, ["message_number", "indexes"]);
+const termSpec = object({field: text, values: array(rangeSpec), mask: integer, negate: boolean}, ["field", "values"]);
+const conditionSpec = object({all: array(termSpec), any: array(termSpec), negate: boolean});
+const fieldSpec = object({key: text, number_of_bits: {...integer, initial: 1}, type: enumeration("unsigned", "bool", "enum", "twos_complement", "ones_complement", "sign_magnitude", "bits", "octets", "text", "literal"), bit_order: order, text_encoding: enumeration("default", "ascii_7", "ascii_8", "latin_1", "utf_8"), length_from: text, length_bias: integer, when: conditionSpec, allowed: array(rangeSpec), constant: integer, scale: object({factor: rationalSpec, bias: rationalSpec, sentinels: array(integer)}, ["factor", "bias"])}, ["key"]);
+const nodeSpec = {kind: "node"};
+const nativeMessageSpec = object({message_number: text, elements: array(nodeSpec), message_standard: standards, standard_version: scalar, subtype: integer, octet_order: order}, ["message_number", "elements"]);
 const schemaSpec = object({format: {kind: "enum", values: ["vmf-schema/1"]}, envelope: enumeration("B", "C", "D", "D1"), message_standard: standards, standard_version: scalar, messages: array(nativeMessageSpec)}, ["format", "messages"]);
 const occurrenceSpec = object({repeat: integer, index: integer}, ["repeat", "index"]);
-const targetSpec = object({key: text, index: scalar});
+const targetSpec = object({key: text}, ["key"]);
 const bindingSpec = object({cot: text, vmf: targetSpec, factor: {...number, initial: 1}, offset: number, values: array(object({cot: scalar, vmf: integer}, ["cot", "vmf"])), encoding: enumeration("hex"), bit_count: integer, occurrences: array(occurrenceSpec)}, ["cot", "vmf"]);
 const constantSpec = object({vmf: targetSpec, value: scalar, encoding: enumeration("hex"), bit_count: integer, occurrences: array(occurrenceSpec)}, ["vmf", "value"]);
 const addressSpec = object({urn: integer, name: text});
@@ -545,6 +539,7 @@ async function save() {
 
 // A typed tree editor exposes native properties without a raw JSON escape hatch.
 function editor(value, spec, set, label = "", path = "") {
+  if (spec === nodeSpec) return editor(value, infer(value), set, label, path);
   spec ||= infer(value);
   if (spec.kind === "scalar" && Array.isArray(value)) spec = array(integer);
   const node = el("div", "object-editor");
@@ -639,95 +634,277 @@ function editor(value, spec, set, label = "", path = "") {
   return node;
 }
 
+// Editor paths address the authored tree. Generated VMF addresses stay private.
+function nodeKind(value) {
+  if (Array.isArray(value)) return "group";
+  if (!isObject(value)) return "invalid";
+  for (const kind of ["optional", "recurrence", "repeat"]) if (guidedOwn(value, kind)) return kind;
+  return "field";
+}
+function nodeBody(value) {
+  const kind = nodeKind(value);
+  return kind === "optional" ? value.optional : ["recurrence", "repeat"].includes(kind) ? value[kind]?.body : undefined;
+}
+function pathValue(owner, path) { return path.reduce((value, key) => value?.[key], owner); }
+function setPath(owner, path, value) {
+  const parent = pathValue(owner, path.slice(0, -1));
+  if (parent !== null && typeof parent === "object") parent[path[path.length - 1]] = value;
+}
+function pathText(path) { return path.map(key => String(key).replace(/~/g, "~0").replace(/\//g, "~1")).join("/"); }
+function selectedNode() { return selectedIndex === null ? undefined : pathValue(selectedDefinition()?.messages?.[selectedMessage], selectedIndex); }
+function eachNode(message, visit) {
+  function walk(node, path, depth) {
+    if (depth > 128) return;
+    visit(node, path);
+    const kind = nodeKind(node);
+    if (kind === "group") node.forEach((item, index) => walk(item, [...path, index], depth + 1));
+    else if (kind === "optional") walk(node.optional, [...path, "optional"], depth + 1);
+    else if (["repeat", "recurrence"].includes(kind) && isObject(node[kind])) walk(node[kind].body, [...path, kind, "body"], depth + 1);
+  }
+  if (Array.isArray(message?.elements)) message.elements.forEach((node, index) => walk(node, ["elements", index], 0));
+}
+function fieldNodes(message) {
+  const result = [];
+  eachNode(message, (node, path) => { if (nodeKind(node) === "field") result.push({node, path}); });
+  return result;
+}
+function freshField(message) {
+  const used = new Set(fieldNodes(message).map(item => item.node.key));
+  let number = 1; while (used.has("field_" + number)) number++;
+  return {key: "field_" + number, number_of_bits: 1};
+}
+function nodeTitle(node) {
+  const kind = nodeKind(node);
+  if (kind === "field") return node.key || "Unnamed field";
+  if (kind === "group") return "Group · " + node.length + (node.length === 1 ? " element" : " elements");
+  if (kind === "optional") return "Optional " + (nodeKind(node.optional) === "field" ? "field" : "group");
+  if (kind === "recurrence") return "Recurring " + (nodeKind(nodeBody(node)) === "field" ? "field" : "group") + " · maximum " + String(node.recurrence?.maximum ?? "?");
+  if (kind === "repeat") return guidedOwn(node.repeat || {}, "count") ? "Fixed repeat · " + String(node.repeat.count) + " times" : "Counted repeat · " + String(node.repeat?.count_from || "choose source");
+  return "Repair element";
+}
 function renderSchemas() {
   const list = $("schema-list"); list.replaceChildren();
   if (!workspace.schemas.length) list.append(el("p", "empty-hint", "No payload definitions yet."));
   for (const schema of workspace.schemas) {
     const card = button("", () => { selectedSchema = schema.id; selectedMessage = selectedIndex = null; renderSchemas(); renderSchemaEditor(); }, "schema-card" + (selectedSchema === schema.id ? " selected" : ""));
     card.dataset.schemaId = schema.id;
-    card.append(el("strong", "", schema.id), el("small", "", "Envelope " + (schema.document.envelope || "—") + " · " + (schema.document.messages || []).length + " message types"));
+    card.append(el("strong", "", schema.id), el("small", "", (schema.document.messages || []).length + " message types"));
     list.append(card);
   }
   const definition = selectedDefinition(), tree = $("schema-tree"); tree.replaceChildren();
   $("add-message").disabled = !definition;
   $("export-schema").disabled = $("delete-schema").disabled = !definition;
-  $("add-index").disabled = !definition || selectedMessage === null;
-  if (!definition) { tree.append(el("p", "empty-hint", "Create or import a schema to begin.")); return; }
-  const root = button("Schema properties", () => { selectedMessage = selectedIndex = null; renderSchemas(); renderSchemaEditor(); }, "tree-select" + (selectedMessage === null ? " selected" : ""));
-  tree.append(root);
+  for (const id of ["add-index", "add-group"]) $(id).disabled = !definition || selectedMessage === null;
+  const container = nodeKind(selectedNode());
+  $("add-index").textContent = selectedIndex !== null && ["group", "optional", "repeat", "recurrence"].includes(container) ? "+ Add field inside" : "+ Add field";
+  $("add-group").textContent = selectedIndex !== null && ["group", "optional", "repeat", "recurrence"].includes(container) ? "+ Add group inside" : "+ Add group";
+  if (!definition) { tree.append(el("p", "empty-hint", draftSchemas().length ? "Select a schema from the library to inspect its messages and fields." : "Create or import a schema to begin.")); return; }
+  tree.append(button("Schema properties", () => { selectedMessage = selectedIndex = null; renderSchemas(); renderSchemaEditor(); }, "tree-select" + (selectedMessage === null ? " selected" : "")));
   (Array.isArray(definition.messages) ? definition.messages : []).forEach((msg, mi) => {
-    if (!msg || typeof msg !== "object") return;
+    if (!isObject(msg)) return;
     const group = el("div", "tree-message");
     group.append(button(msg.message_number || "Untitled message", () => { selectedMessage = mi; selectedIndex = null; renderSchemas(); renderSchemaEditor(); }, "tree-select" + (selectedMessage === mi && selectedIndex === null ? " selected" : "")));
-    (Array.isArray(msg.indexes) ? msg.indexes : []).forEach((field, fi) => { if (field && typeof field === "object") group.append(button((field.index_number || "?") + "  " + (field.key || field.indicator || "field"), () => { selectedMessage = mi; selectedIndex = fi; renderSchemas(); renderSchemaEditor(); }, "tree-select field" + (selectedMessage === mi && selectedIndex === fi ? " selected" : ""))); });
+    eachNode(msg, (node, path) => {
+      const kind = nodeKind(node), selected = selectedMessage === mi && json(selectedIndex) === json(path);
+      const item = button(nodeTitle(node), () => { selectedMessage = mi; selectedIndex = path; renderSchemas(); renderSchemaEditor(); }, "tree-select schema-node " + kind + (selected ? " selected" : ""));
+      item.style.setProperty("--node-depth", String(path.filter(key => typeof key === "number").length + path.filter(key => key === "optional" || key === "body").length - 1));
+      item.dataset.nodePath = "/messages/" + mi + "/" + pathText(path);
+      if (kind === "field") item.dataset.fieldKey = node.key || "";
+      group.append(item);
+    });
+    if (Array.isArray(msg.elements) && !msg.elements.length) group.append(el("p", "empty-hint", "Add a field or group below. Elements are encoded from top to bottom."));
     tree.append(group);
   });
 }
-// Payload authoring keeps native documents exact and UI state outside them.
+
 const schemaUndoHistory = [];
 const schemaSteps = new Map();
 const schemaStepReach = new Map();
 let schemaExplanation = "";
 const guidedOwn = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
 const guidedLabel = key => key.replace(/_/g, " ").replace(/^./, char => char.toUpperCase());
-const guidedControllerKeys = ["indicator", "encode_type", "representation", "text_encoding", "length_from"];
-const guidedScalarTypes = ["default", "bool", "unsigned", "signed", "enum", "scaled"];
+const guidedControllerKeys = ["type", "text_encoding", "length_from"];
+const guidedScalarTypes = ["unsigned", "bool", "enum", "twos_complement", "ones_complement", "sign_magnitude"];
+const signedTypes = ["twos_complement", "ones_complement", "sign_magnitude"];
 
-function resetSchemaHistory() {
-  schemaUndoHistory.length = 0; schemaSteps.clear(); schemaStepReach.clear(); schemaExplanation = "";
+function resetSchemaHistory() { schemaUndoHistory.length = 0; schemaSteps.clear(); schemaStepReach.clear(); schemaExplanation = ""; }
+function schemaSelection() { return {schema: selectedSchema, message: selectedMessage, index: selectedIndex?.slice() ?? null}; }
+const schemaIdentities = new WeakMap();
+let nextSchemaIdentity = 1;
+function schemaIdentity(value) {
+  if (!value || typeof value !== "object") return null;
+  if (!schemaIdentities.has(value)) schemaIdentities.set(value, nextSchemaIdentity++);
+  return schemaIdentities.get(value);
 }
-function schemaSelection() {
-  return {schema: selectedSchema, message: selectedMessage, index: selectedIndex};
+function schemaSnapshot(value) {
+  const copy = clone(value), pending = [[value, copy]];
+  while (pending.length) {
+    const [source, target] = pending.pop();
+    if (!source || typeof source !== "object" || !target || typeof target !== "object") continue;
+    schemaIdentities.set(target, schemaIdentity(source));
+    for (const key of Object.keys(source)) if (source[key] && typeof source[key] === "object") pending.push([source[key], target[key]]);
+  }
+  return copy;
+}
+function outputPatches(before, after, path = [], result = []) {
+  if (json(before) === json(after)) return result;
+  if (isObject(before) && isObject(after)) {
+    for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) outputPatches(before[key], after[key], [...path, key], result);
+  } else if (Array.isArray(before) && Array.isArray(after) && before.length === after.length) {
+    before.forEach((item, index) => outputPatches(item, after[index], [...path, index], result));
+  } else result.push({path, before: before === undefined ? undefined : clone(before), after: after === undefined ? undefined : clone(after)});
+  return result;
+}
+function schemaLayout(message) {
+  const result = {message, messageId: schemaIdentity(message), groups: new Map(), repeats: new Map(), groupIds: new Map(), repeatIds: new Map(), repeatModes: new Map(), fields: new Map()};
+  let groups = 0, repeats = 0;
+  function visit(node, address, ancestry, depth) {
+    if (depth > 128) return;
+    const kind = nodeKind(node), identity = schemaIdentity(node);
+    if (kind === "field") { result.fields.set(identity, {key: node.key, address: address.join("."), ancestry}); return; }
+    if (kind === "group") { node.forEach((child, index) => visit(child, [...address, index + 1], ancestry, depth + 1)); return; }
+    if (kind === "optional" && nodeKind(node.optional) !== "field") { result.groups.set(++groups, identity); result.groupIds.set(identity, groups); }
+    if (kind === "repeat" || kind === "recurrence") { result.repeats.set(++repeats, identity); result.repeatIds.set(identity, repeats); result.repeatModes.set(identity, kind === "recurrence" ? "recurrence" : guidedOwn(node.repeat || {}, "count") ? "fixed" : "scalar"); ancestry = [...ancestry, identity]; }
+    const body = nodeBody(node);
+    if (Array.isArray(body)) body.forEach((child, index) => visit(child, [...address, index + 1], ancestry, depth + 1));
+    else if (body !== undefined) visit(body, [...address, 1], ancestry, depth + 1);
+  }
+  if (Array.isArray(message?.elements)) message.elements.forEach((node, index) => visit(node, [index + 1], [], 0));
+  return result;
+}
+function schemaLayouts() {
+  return draftSchemas().flatMap(schema => (Array.isArray(schema.document.messages) ? schema.document.messages : []).filter(isObject).map(message => ({schema: schema.id, ...schemaLayout(message)})));
+}
+function reconcileSchemaControls(before) {
+  const after = schemaLayouts(), affected = new Set(), unsafe = new Set();
+  for (const output of draftOutputs()) {
+    const schema = schemaById(output.mapping?.schema), message = schema?.document.messages?.[output.mapping?.message];
+    const current = after.find(layout => layout.schema === schema?.id && layout.messageId === schemaIdentity(message));
+    const previous = before.find(layout => layout.schema === schema?.id && layout.messageId === schemaIdentity(message));
+    if (!previous || !current) continue;
+    const changedScopes = previous.groups.size !== current.groups.size || previous.repeats.size !== current.repeats.size || [...previous.groups].some(([id, node]) => current.groups.get(id) !== node) || [...previous.repeats].some(([id, node]) => current.repeats.get(id) !== node || previous.repeatModes.get(node) !== current.repeatModes.get(node));
+    const changedFields = previous.fields.size !== current.fields.size || [...previous.fields].some(([node, field]) => !current.fields.has(node) || field.ancestry.length !== current.fields.get(node).ancestry.length || field.ancestry.some((parent, index) => parent !== current.fields.get(node).ancestry[index]));
+    if (!changedScopes && !changedFields) continue;
+    const invalidate = (lost = true) => { output.enabled = false; affected.add(output.id); if (lost) unsafe.add(output.id); };
+    const remap = (id, oldMap, newMap) => newMap.get(oldMap.get(Number(id)));
+    for (const name of ["presence", "repeat_counts"]) {
+      if (!Array.isArray(output.mapping[name])) continue;
+      const group = name === "presence", key = group ? "group" : "repeat";
+      output.mapping[name] = output.mapping[name].filter(control => {
+        if (!isObject(control)) return true;
+        const next = remap(control[key], group ? previous.groups : previous.repeats, group ? current.groupIds : current.repeatIds);
+        if (next === undefined || !group && current.repeatModes.get(current.repeats.get(next)) !== "recurrence") { invalidate(); return false; }
+        control[key] = next; return true;
+      });
+    }
+    const entries = ["fields", "vmf_constants", "presence", "repeat_counts"].flatMap(name => Array.isArray(output.mapping[name]) ? output.mapping[name] : []);
+    for (const entry of entries) {
+      if (!isObject(entry)) continue;
+      if (Array.isArray(entry.occurrences)) entry.occurrences = entry.occurrences.filter(selector => {
+        if (!isObject(selector)) return true;
+        const next = remap(selector.repeat, previous.repeats, current.repeatIds);
+        if (next === undefined) { invalidate(); return false; }
+        selector.repeat = next; return true;
+      });
+      if (!isObject(entry.vmf) || typeof entry.vmf.key !== "string") continue;
+      const oldField = [...previous.fields].find(([, field]) => field.key === entry.vmf.key);
+      if (!oldField) continue;
+      const next = current.fields.get(oldField[0]);
+      if (!next || oldField[1].ancestry.length !== next.ancestry.length || oldField[1].ancestry.some((node, index) => node !== next.ancestry[index] || previous.repeatModes.get(node) !== current.repeatModes.get(node))) {
+        const lost = !next || Array.isArray(entry.occurrences) && entry.occurrences.length > 0;
+        delete entry.occurrences; invalidate(lost);
+      }
+    }
+  }
+  if (affected.size) schemaExplanation = (schemaExplanation ? schemaExplanation + " " : "") + "Outputs " + [...affected].join(", ") + " were disabled because their fields or repeat/group controls changed. Review their mappings and occurrence settings before enabling them. Undo restores this edit.";
+  return unsafe;
 }
 function schemaChange(label, action, refresh = true) {
-  const before = clone(workspace.schemas), selection = schemaSelection();
+  const before = schemaSnapshot(workspace.schemas), selection = schemaSelection(), layouts = schemaLayouts();
   const steps = [...schemaSteps], reach = [...schemaStepReach];
-  const outputs = draftOutputs().map((entry, index) => ({entry, index, reference: {schema: entry.mapping?.schema, message: entry.mapping?.message, enabled: entry.enabled}}));
+  const outputs = draftOutputs().map((entry, index) => ({entry, index, value: clone(entry)}));
   action();
   if (json(before) === json(workspace.schemas)) return false;
-  const removedOutputs = outputs.filter(({entry}) => !workspace.outputs.includes(entry))
-    .map(({entry, index}) => ({entry: clone(entry), index}));
-  const referenceChanges = outputs.filter(({entry}) => workspace.outputs.includes(entry)).map(({entry, reference}) => ({id: entry.id, before: reference, after: {schema: entry.mapping?.schema, message: entry.mapping?.message, enabled: entry.enabled}})).filter(change => json(change.before) !== json(change.after));
-  schemaUndoHistory.push({label, schemas: before, selection, removedOutputs, referenceChanges, steps, reach});
+  reconcileSchemaControls(layouts);
+  const removedOutputs = outputs.filter(({entry}) => !workspace.outputs.includes(entry)).map(({value, index}) => ({entry: value, index}));
+  const outputChanges = outputs.filter(({entry}) => workspace.outputs.includes(entry)).map(({entry, value}) => ({id: entry.id, patches: outputPatches(value, entry)})).filter(change => change.patches.length);
+  schemaUndoHistory.push({label, schemas: before, selection, removedOutputs, outputChanges, steps, reach});
   changed();
-  if (refresh) render();
-  else { renderSchemas(); updateSchemaUndo(); scheduleWires(); }
+  if (refresh) render(); else { renderSchemas(); renderSchemaExplanation(); updateSchemaUndo(); scheduleWires(); }
   return true;
 }
+function renderSchemaExplanation() {
+  const target = $("schema-editor");
+  let note = target.querySelector(":scope > .guided-explanation");
+  if (!schemaExplanation) { note?.remove(); return; }
+  if (!note) {
+    note = el("p", "guided-explanation");
+    const history = target.querySelector(".schema-history");
+    if (history) history.after(note); else target.prepend(note);
+  }
+  note.textContent = schemaExplanation;
+}
 function updateSchemaUndo() {
-  const node = $("schema-undo");
-  if (!node) return;
-  const entry = schemaUndoHistory[schemaUndoHistory.length - 1];
-  node.disabled = !entry;
-  node.textContent = entry ? "Undo: " + entry.label : "Undo";
+  const node = $("schema-undo"); if (!node) return;
+  const entry = schemaUndoHistory[schemaUndoHistory.length - 1]; node.disabled = !entry; node.textContent = entry ? "Undo: " + entry.label : "Undo";
 }
 function undoSchemaChange() {
   if ($("schema-editor").contains(document.activeElement)) document.activeElement.blur();
   const entry = schemaUndoHistory.pop(); if (!entry) return;
-  const restored = new Set(entry.schemas.map(schema => schema.id));
-  const removed = new Set(draftSchemas().filter(schema => !restored.has(schema.id)).map(schema => schema.id));
-  workspace.outputs = draftOutputs().filter(output => !removed.has(output.mapping?.schema));
-  for (const {entry: output, index} of entry.removedOutputs) {
-    if (!workspace.outputs.some(current => current.id === output.id)) workspace.outputs.splice(Math.min(index, workspace.outputs.length), 0, clone(output));
-  }
-  for (const change of entry.referenceChanges || []) {
+  const layouts = schemaLayouts();
+  const selections = draftOutputs().map(output => ({id: output.id, schema: output.mapping?.schema, message: schemaIdentity(schemaById(output.mapping?.schema)?.document.messages?.[output.mapping?.message])}));
+  const changes = (entry.outputChanges || []).map(change => {
     const output = draftOutputs().find(item => item.id === change.id);
-    if (!isObject(output?.mapping) || output.mapping.schema !== change.after.schema) continue;
-    for (const key of ["message", "enabled"]) {
-      const owner = key === "enabled" ? output : output.mapping;
-      if (json(owner[key]) !== json(change.after[key])) continue;
-      if (change.before[key] === undefined) delete owner[key];
-      else owner[key] = change.before[key];
+    return {id: change.id, patches: output ? change.patches.filter(patch => json(pathValue(output, patch.path)) === json(patch.after)) : []};
+  });
+  const restored = new Set(entry.schemas.map(schema => schema.id)), removed = new Set(draftSchemas().filter(schema => !restored.has(schema.id)).map(schema => schema.id));
+  workspace.outputs = draftOutputs().filter(output => !removed.has(output.mapping?.schema));
+  for (const {entry: output, index} of entry.removedOutputs) if (!workspace.outputs.some(current => current.id === output.id)) workspace.outputs.splice(Math.min(index, workspace.outputs.length), 0, clone(output));
+  workspace.schemas = schemaSnapshot(entry.schemas);
+  const after = schemaLayouts(), lostMessages = new Set();
+  for (const selection of selections) {
+    const output = draftOutputs().find(item => item.id === selection.id);
+    if (!output || !selection.message || output.mapping?.schema !== selection.schema) continue;
+    const schema = schemaById(selection.schema), messages = schema?.document.messages;
+    const ordinal = Array.isArray(messages) ? messages.findIndex(message => schemaIdentity(message) === selection.message) : -1;
+    if (ordinal >= 0) output.mapping.message = ordinal;
+    else { delete output.mapping.message; output.enabled = false; lostMessages.add(output.id); }
+  }
+  // A mapping created after a rename must follow the same field back on Undo.
+  for (const previous of layouts) {
+    const current = after.find(layout => layout.schema === previous.schema && layout.messageId === previous.messageId);
+    if (!current) continue;
+    const schema = schemaById(current.schema), ordinal = schema.document.messages.indexOf(current.message);
+    for (const [identity, field] of previous.fields) {
+      const restoredField = current.fields.get(identity);
+      if (!restoredField || field.key === restoredField.key) continue;
+      for (const output of draftOutputs()) {
+        if (output.mapping?.schema !== current.schema || output.mapping?.message !== ordinal) continue;
+        for (const name of ["fields", "vmf_constants"]) for (const binding of Array.isArray(output.mapping[name]) ? output.mapping[name] : []) if (binding?.vmf?.key === field.key) binding.vmf.key = restoredField.key;
+      }
     }
   }
-  workspace.schemas = clone(entry.schemas);
-  selectedSchema = entry.selection.schema;
-  selectedMessage = entry.selection.message; selectedIndex = entry.selection.index;
-  selectedWire = selectedOutput = null;
-  schemaSteps.clear(); schemaStepReach.clear();
+  schemaExplanation = "";
+  const unsafe = reconcileSchemaControls(layouts);
+  for (const change of changes) {
+    const output = draftOutputs().find(item => item.id === change.id); if (!output) continue;
+    for (const patch of change.patches) {
+      const last = patch.path[patch.path.length - 1];
+      // Stable identities already remapped numeric selectors and keyed targets.
+      if ((last === "repeat" || last === "group") && patch.path[0] === "mapping") continue;
+      if (last === "key" && patch.path.includes("vmf")) continue;
+      if (last === "message" && selections.some(selection => selection.id === output.id && selection.message)) continue;
+      const owner = pathValue(output, patch.path.slice(0, -1)); if (!owner || typeof owner !== "object") continue;
+      if (patch.before === undefined) delete owner[last]; else owner[last] = clone(patch.before);
+    }
+  }
+  for (const output of draftOutputs()) if (unsafe.has(output.id) || lostMessages.has(output.id)) output.enabled = false;
+  selectedSchema = entry.selection.schema; selectedMessage = entry.selection.message; selectedIndex = entry.selection.index;
+  selectedWire = selectedOutput = null; schemaSteps.clear(); schemaStepReach.clear();
   for (const [key, value] of entry.steps) schemaSteps.set(key, value);
   for (const [key, value] of entry.reach) schemaStepReach.set(key, value);
-  schemaExplanation = "Undid " + entry.label + ". Edits will be saved automatically.";
+  const review = [...new Set([...unsafe, ...lostMessages])];
+  schemaExplanation = "Undid " + entry.label + ". Edits will be saved automatically." + (review.length ? " Outputs " + review.join(", ") + " remain disabled because controls or fields added afterward need review." : "");
   changed(); render();
 }
 function guidedHelp(name, description) {
@@ -738,47 +915,72 @@ function guidedRemove(owner, keys, removed) {
   for (const key of keys) if (guidedOwn(owner, key)) { delete owner[key]; removed.push(key); }
 }
 function guidedIndexKeys(field) {
-  const keys = ["index_number", "number_of_bits", "key", "group_code", "repeat_code", "indicator"];
-  const role = field.indicator || "none", type = field.encode_type || "default";
-  if (role !== "none") {
-    if (role === "fpi" || role === "gpi") keys.push("target");
-    return keys;
-  }
-  keys.push("encode_type", "when");
-  if (guidedScalarTypes.includes(type)) {
-    keys.push("representation", "bit_order", "allowed", "constant");
-    if (type === "scaled") keys.push("scale");
-  } else if (["bits", "octets", "text", "literal"].includes(type)) {
+  const keys = ["key", "type", "number_of_bits", "when"], type = field.type || "unsigned";
+  if (guidedScalarTypes.includes(type)) { keys.push("bit_order", "allowed", "constant"); if (type === "unsigned" || signedTypes.includes(type)) keys.push("scale"); }
+  else if (["bits", "octets", "text", "literal"].includes(type)) {
     if (type !== "bits") keys.push("bit_order");
     if (type === "text" || type === "literal") keys.push("text_encoding");
-    if (type !== "literal") {
-      keys.push("length_from");
-      if (guidedOwn(field, "length_from")) keys.push("length_bias");
-    }
+    if (type !== "literal") { keys.push("length_from"); if (guidedOwn(field, "length_from")) keys.push("length_bias"); }
   }
   return keys;
 }
 function guidedPruneField(field, removed) {
-  const known = Object.keys(indexSpec.properties), applicable = guidedIndexKeys(field);
-  guidedRemove(field, known.filter(key => !applicable.includes(key)), removed);
-  const role = field.indicator || "none", type = field.encode_type || "default";
-  if (role !== "none") {
-    if (field.number_of_bits !== 1) { field.number_of_bits = 1; removed.push("previous width (indicators use one bit)"); }
-    if (field.target && ((role === "gpi") !== /^G/.test(field.target))) guidedRemove(field, ["target"], removed);
-    return;
-  }
-  if (guidedScalarTypes.includes(type) && guidedOwn(field, "representation")) {
-    const choices = type === "signed" ? ["twos_complement", "ones_complement", "sign_magnitude"] : type === "scaled" ? ["default", "unsigned", "twos_complement", "ones_complement", "sign_magnitude"] : ["default", "unsigned"];
-    if (!choices.includes(field.representation)) guidedRemove(field, ["representation"], removed);
-  }
-  if (type === "scaled" && !field.scale) field.scale = {factor: {numerator: 1, denominator: 1}, bias: {numerator: 0, denominator: 1}};
-  if (type === "bool" && field.number_of_bits !== 1) { field.number_of_bits = 1; removed.push("previous width (booleans use one bit)"); }
+  const applicable = guidedIndexKeys(field), type = field.type || "unsigned";
+  guidedRemove(field, Object.keys(fieldSpec.properties).filter(key => !applicable.includes(key)), removed);
+  if (type === "bool") guidedRemove(field, ["number_of_bits"], removed);
   if (type === "literal" && field.text_encoding && !["default", "ascii_7"].includes(field.text_encoding)) guidedRemove(field, ["text_encoding"], removed);
   if (guidedOwn(field, "number_of_bits")) {
-    const width = field.number_of_bits, unit = type === "octets" ? 8 : type === "literal" || type === "text" && (!field.text_encoding || ["default", "ascii_7"].includes(field.text_encoding)) ? 7 : type === "text" ? 8 : 1;
-    const valid = Number.isInteger(width) || typeof width === "bigint";
-    if (valid && (BigInt(width) < 0n || BigInt(width) % BigInt(unit) || type === "bool" && BigInt(width) !== 1n || guidedScalarTypes.includes(type) && (BigInt(width) < BigInt(type === "signed" || ["twos_complement", "ones_complement", "sign_magnitude"].includes(field.representation) ? 2 : 1) || BigInt(width) > 64n) || !guidedScalarTypes.includes(type) && type !== "literal" && !field.length_from && BigInt(width) === 0n)) guidedRemove(field, ["number_of_bits"], removed);
+    try { guidedCheckInteger("number_of_bits", field.number_of_bits, field, {}); }
+    catch { guidedRemove(field, ["number_of_bits"], removed); }
   }
+}
+function validateFieldKey(value, field, message) {
+  if (typeof value !== "string" || !value || value.includes("\0")) throw new Error("Enter a nonempty field key without NUL characters.");
+  if (fieldNodes(message).some(item => item.node !== field && item.node.key === value)) throw new Error("This message already contains a field named " + value + ". Choose a unique key.");
+}
+function renameFieldKey(field, key, message) {
+  const previous = field.key;
+  const ambiguous = typeof previous === "string" && previous && fieldNodes(message).filter(item => item.node.key === previous).length > 1;
+  field.key = key;
+  if (ambiguous) {
+    schemaExplanation = "The previous key was duplicated. Renamed only this field; existing references and mappings remain with the other field. Review ambiguous dependencies before continuing. Undo restores the previous draft.";
+    return;
+  }
+  if (typeof previous !== "string" || !previous || previous === key) return;
+  eachNode(message, node => {
+    if (nodeKind(node) === "field") {
+      if (node.length_from === previous) node.length_from = key;
+      for (const mode of ["all", "any"]) for (const term of Array.isArray(node.when?.[mode]) ? node.when[mode] : []) if (isObject(term) && term.field === previous) term.field = key;
+    } else if (nodeKind(node) === "repeat" && node.repeat?.count_from === previous) node.repeat.count_from = key;
+  });
+  for (const output of draftOutputs()) {
+    if (output.mapping?.schema !== selectedSchema || output.mapping?.message !== selectedMessage) continue;
+    for (const name of ["fields", "vmf_constants"]) for (const binding of Array.isArray(output.mapping[name]) ? output.mapping[name] : []) if (isObject(binding?.vmf) && binding.vmf.key === previous) binding.vmf.key = key;
+  }
+}
+function precedingFields(message, consumer, extent = false) {
+  const result = [];
+  function walk(node, ancestors, optional, depth) {
+    if (depth > 128) return false;
+    if (node === consumer) { result.push(...ancestors); return true; }
+    const kind = nodeKind(node);
+    if (kind === "field") return false;
+    if (kind === "group") {
+      const available = ancestors.slice();
+      for (const child of node) {
+        if (walk(child, available, optional, depth + 1)) return true;
+        if (!optional && nodeKind(child) === "field" && !child.when && guidedScalarTypes.includes(child.type || "unsigned") && (!extent || !child.scale && ["unsigned", "bool", "enum"].includes(child.type || "unsigned"))) available.push(child);
+        if (!optional && Array.isArray(child)) for (const candidate of alwaysFields(child)) if (!extent || !candidate.scale && ["unsigned", "bool", "enum"].includes(candidate.type || "unsigned")) available.push(candidate);
+      }
+    } else {
+      const body = nodeBody(node);
+      if (body !== undefined && walk(body, ancestors, false, depth + 1)) return true;
+    }
+    return false;
+  }
+  function alwaysFields(nodes) { return nodes.flatMap(node => Array.isArray(node) ? alwaysFields(node) : nodeKind(node) === "field" && !node.when && guidedScalarTypes.includes(node.type || "unsigned") ? [node] : []); }
+  walk(message?.elements || [], [], false, 0);
+  return [...new Map(result.filter(node => typeof node.key === "string" && node.key).map(node => [node.key, node])).values()];
 }
 function guidedController(label, action) {
   const removed = [];
@@ -786,6 +988,7 @@ function guidedController(label, action) {
 }
 function guidedDefault(spec, key) {
   if (key === "scale") return {factor: {numerator: 1, denominator: 1}, bias: {numerator: 0, denominator: 1}};
+  if (key === "when") return {all: []};
   return initial(spec);
 }
 function guidedInteger(source) {
@@ -795,17 +998,17 @@ function guidedInteger(source) {
   return value;
 }
 function guidedCheckInteger(key, next, owner, context) {
-  const value = BigInt(next);
-  const signed = ["numerator", "length_bias", "bias"].includes(key);
+  const value = BigInt(next), signed = ["numerator", "length_bias", "bias"].includes(key);
   if (!signed && value < 0n) throw new Error("Enter an unsigned integer.");
   if (signed && value > 9223372036854775807n) throw new Error("Enter a signed 64-bit integer.");
   if (key === "denominator" && value === 0n) throw new Error("Denominator must be nonzero.");
   if (key === "subtype" && value > 127n) throw new Error("Subtype must be between 0 and 127.");
+  if (["count", "maximum"].includes(key) && value === 18446744073709551615n) throw new Error("Enter a finite count below 18446744073709551615.");
+  if (key === "maximum" && context.recurrence && value < 1n) throw new Error("Recurrence maximum must be positive.");
   if (key === "number_of_bits") {
-    const type = owner.encode_type || "default", role = owner.indicator || "none";
-    if (role !== "none" && value !== 1n) throw new Error("Indicators use one bit.");
+    const type = owner.type || "unsigned";
     if (type === "bool" && value !== 1n) throw new Error("Boolean fields use one bit.");
-    if (guidedScalarTypes.includes(type) && (value < BigInt(type === "signed" || ["twos_complement", "ones_complement", "sign_magnitude"].includes(owner.representation) ? 2 : 1) || value > 64n)) throw new Error("Enter a scalar width between its representation minimum and 64 bits.");
+    if (guidedScalarTypes.includes(type) && (value < BigInt(signedTypes.includes(type) ? 2 : 1) || value > 64n)) throw new Error("Enter a scalar width between its representation minimum and 64 bits.");
     const unit = type === "octets" ? 8n : type === "literal" || type === "text" && (!owner.text_encoding || ["default", "ascii_7"].includes(owner.text_encoding)) ? 7n : type === "text" ? 8n : 1n;
     if (value % unit) throw new Error("Capacity must be divisible by " + unit + " bits.");
     if (!guidedScalarTypes.includes(type) && type !== "literal" && !owner.length_from && value === 0n) throw new Error("Fixed capacity must be positive. Zero is allowed with a length source or literal encoding.");
@@ -827,17 +1030,20 @@ function guidedField(owner, key, spec, path, context = {}, options = {}) {
     return row;
   }
   const current = guidedOwn(owner, key) ? owner[key] : options.defaultValue;
+  const reference = ["length_from", "count_from", "field"].includes(key) && context.message;
+  if (reference) spec = {kind: "enum", values: precedingFields(context.message, context.consumer || context.field, key !== "field").map(field => field.key)};
   if (spec.kind === "object" || spec.kind === "array") {
     if (options.required && (spec.kind === "object" ? !isObject(current) : !Array.isArray(current))) row.dataset.requiredInvalid = "true";
     row.append(guidedValue(current, spec, next => { owner[key] = next; }, path + "/" + key, context));
     return row;
   }
   const validType = current === undefined || spec.kind === "enum" ? current === undefined || spec.kind !== "enum" || spec.values.includes(current) : spec.kind === "integer" ? (typeof current === "bigint" || Number.isSafeInteger(current)) : spec.kind === "boolean" ? typeof current === "boolean" : typeof current === "string";
-  if (!validType) { if (options.required) row.dataset.requiredInvalid = "true"; row.append(guidedRepairValue(current, spec, next => { owner[key] = next; if (context.field === owner && guidedControllerKeys.includes(key)) guidedPruneField(owner, []); }, path + "/" + key, context)); return row; }
+  if (!validType && !reference) { if (options.required) row.dataset.requiredInvalid = "true"; row.append(guidedRepairValue(current, spec, next => { owner[key] = next; if (context.field === owner && guidedControllerKeys.includes(key)) guidedPruneField(owner, []); }, path + "/" + key, context)); return row; }
   let input;
   if (spec.kind === "enum") {
     input = el("select");
-    if (current === undefined) input.add(new Option("Choose…", ""));
+    if (current === undefined || reference) input.add(new Option(reference ? "Choose an earlier field…" : "Choose…", ""));
+    if (current !== undefined && reference && !spec.values.includes(current)) { const saved = new Option("Unavailable saved reference: " + String(current), String(current)); saved.disabled = true; input.add(saved); }
     for (const option of spec.values) input.add(new Option(String(option), String(option)));
     input.value = current === undefined ? "" : String(current);
   } else {
@@ -849,28 +1055,37 @@ function guidedField(owner, key, spec, path, context = {}, options = {}) {
   }
   input.dataset.property = key; input.setAttribute("aria-label", key);
   input.required = !!options.required;
+  if (reference && current !== undefined && !spec.values.includes(current)) input.setCustomValidity("Choose an available preceding field to repair this reference.");
+  if (key === "key" && context.field === owner && current !== undefined) {
+    try { validateFieldKey(current, owner, context.message); } catch (error) { input.setCustomValidity(error.message); }
+  }
   if (current !== undefined && spec.kind === "integer") {
     try { guidedCheckInteger(key, guidedInteger(String(current)), owner, context); }
     catch (error) { input.setCustomValidity(error.message); }
   }
-  input.addEventListener("input", () => input.setCustomValidity(""));
+  const pending = el("small", "pending-input", "Press Tab or leave this field to save");
+  pending.hidden = true; pending.setAttribute("role", "status");
+  input.addEventListener("input", () => { input.setCustomValidity(""); pending.hidden = false; });
   input.addEventListener("change", () => {
     try {
       let next = spec.kind === "boolean" ? input.checked : spec.kind === "enum" ? spec.values.find(option => String(option) === input.value) : input.value;
       if (spec.kind === "integer") { next = guidedInteger(input.value); guidedCheckInteger(key, next, owner, context); }
+      if (reference && next === undefined) throw new Error("Choose an available preceding field.");
+      if (key === "key" && context.field === owner) validateFieldKey(next, owner, context.message);
       if (options.required && next === "") throw new Error("Enter " + guidedLabel(key).toLowerCase() + ".");
       if (key === "message_number" && !/^K(?:0?[0-9]|10)\.(?:[1-9]|[1-9][0-9]|1[01][0-9]|12[0-7])$/.test(next)) throw new Error("Enter a K-number with functional area 0–10 and message number 1–127, such as K01.1.");
       input.setCustomValidity("");
       if (options.controller) guidedController("change " + guidedLabel(key), removed => {
-        owner[key] = next;
+        if (key === "key" && context.field === owner) renameFieldKey(owner, next, context.message); else owner[key] = next;
         if (options.setValue) options.setValue(next);
         if (context.field === owner && guidedControllerKeys.includes(key)) guidedPruneField(owner, removed);
         if (options.after) options.after(removed);
       });
-      else schemaChange("change " + guidedLabel(key), () => { owner[key] = next; if (options.setValue) options.setValue(next); }, false);
+      else schemaChange("change " + guidedLabel(key), () => { if (key === "key" && context.field === owner) renameFieldKey(owner, next, context.message); else owner[key] = next; if (options.setValue) options.setValue(next); }, false);
+      pending.hidden = true;
     } catch (error) { input.setCustomValidity(error.message); input.reportValidity(); }
   });
-  row.append(input); return row;
+  row.append(input, pending); return row;
 }
 function guidedFields(target, owner, spec, keys, path, context, required = spec.required || []) {
   for (const key of keys) target.append(guidedField(owner, key, spec.properties[key], path, context, {required: required.includes(key)}));
@@ -981,8 +1196,7 @@ function guidedValue(value, spec, set, path, context = {}) {
   if (!isObject(value)) return guidedRepairValue(value, spec, set, path, context);
   if (spec === schemaSpec) return guidedSchema(value, path);
   if (spec === nativeMessageSpec) return guidedMessage(value, path);
-  if (spec === indexSpec) return guidedIndex(value, path, context);
-  if (spec === repeatSpec) return guidedRepeat(value, path, context);
+  if (spec === fieldSpec) return guidedIndex(value, path, context);
   if (spec === conditionSpec) return guidedCondition(value, path, context);
   const node = el("div", "object-editor");
   guidedFields(node, value, spec, Object.keys(spec.properties), path, context);
@@ -999,116 +1213,96 @@ function guidedMalformedItems(target, value, spec, path, context) {
 }
 function guidedSchema(value, path) {
   const node = el("div");
+  guidedNote(node, "Library name: " + selectedSchema + ". This workspace label is separate from a message number such as K01.1 and the specification's MIL standard edition.");
+  if (value.format !== "vmf-schema/1") node.append(guidedField(value, "format", schemaSpec.properties.format, path, {}, {required: true}));
   node.append(guidedStepper(path, [
-    {title: "Defaults", render: target => { guidedNote(target, "A default envelope is optional. Each output explicitly chooses its envelope. Changing this default preserves all payload standard selections."); target.append(guidedField(value, "envelope", schemaSpec.properties.envelope, path, {}, {controller: true})); target.append(guidedField(value, "format", schemaSpec.properties.format, path, {}, {required: true})); }},
+    {title: "Defaults", render: target => { guidedNote(target, "Choose the standard edition for your definition. An envelope default is optional; outputs choose their own envelopes."); target.append(guidedField(value, "envelope", schemaSpec.properties.envelope, path, {}, {controller: true})); }},
     {title: "Standard", render: target => guidedStandard(target, value, path, value.envelope, false)},
-    {title: "Messages", render: target => { guidedNote(target, "Use + Message and the outline to edit message identities, fields, and repeat definitions."); if (!Array.isArray(value.messages)) target.append(guidedField(value, "messages", schemaSpec.properties.messages, path, {}, {required: true})); else { guidedNote(target, value.messages.length + " message definitions."); guidedMalformedItems(target, value.messages, nativeMessageSpec, path + "/messages", {}); } }}
+    {title: "Messages", render: target => { guidedNote(target, "Use + Message, then add fields and groups in the order they appear in your specification."); if (!Array.isArray(value.messages)) target.append(guidedField(value, "messages", schemaSpec.properties.messages, path, {}, {required: true})); else guidedMalformedItems(target, value.messages, nativeMessageSpec, path + "/messages", {}); }}
   ]));
   guidedRepairProperties(node, value, schemaSpec, Object.keys(schemaSpec.properties), path, {});
   return node;
 }
 function guidedMessage(value, path) {
   const node = el("div"), context = {message: value};
+  guidedNote(node, "Message number identifies the message inside this definition, for example K01.1. The MIL standard edition identifies your source specification; the library name identifies the saved definition.");
+  if (!value.message_number) guidedNote(node, "Enter the message number from your specification to complete this new message. For the synthetic walkthrough, use K01.1.");
   node.append(guidedStepper(path, [
     {title: "Identity", render: target => { guidedFields(target, value, nativeMessageSpec, ["message_number", "subtype"], path, context); guidedStandard(target, value, path, selectedDefinition()?.envelope, true); }},
-    {title: "Packing", render: target => { guidedFields(target, value, nativeMessageSpec, ["octet_order"], path, context); guidedNote(target, "Use + Add field to message and the outline to define fields in wire order."); if (!Array.isArray(value.indexes)) target.append(guidedField(value, "indexes", nativeMessageSpec.properties.indexes, path, context, {required: true})); else guidedMalformedItems(target, value.indexes, indexSpec, path + "/indexes", context); }},
-    {title: "Repeats", render: target => guidedFields(target, value, nativeMessageSpec, ["repeats"], path, context)}
+    {title: "Packing", render: target => { guidedFields(target, value, nativeMessageSpec, ["octet_order"], path, context); guidedNote(target, "The outline lists elements in wire order. Select an element to move it, wrap it, or add children. A group containing one field remains a group."); if (!Array.isArray(value.elements)) target.append(guidedField(value, "elements", nativeMessageSpec.properties.elements, path, context, {required: true})); }}
   ]));
   guidedRepairProperties(node, value, nativeMessageSpec, Object.keys(nativeMessageSpec.properties), path, context);
   return node;
 }
-function guidedFixedBitWidth(target, value, indicator = false) {
-  guidedNote(target, "This field uses a fixed width of one bit.");
-  const valid = indicator ? !guidedOwn(value, "number_of_bits") || value.number_of_bits === 0 || value.number_of_bits === 1 : value.number_of_bits === 1;
-  if (!valid) {
-    const repair = el("div", "guided-repair"); repair.dataset.requiredInvalid = "true";
-    repair.append(el("code", "repair-value", "Saved width: " + (json(value.number_of_bits) ?? "missing")), button("Use one-bit width", () => schemaChange("repair one-bit width", () => { value.number_of_bits = 1; })));
-    target.append(repair);
-  }
-}
+function directlyOptional(path) { return path?.[path.length - 1] === "optional"; }
 function guidedIndex(value, path, context) {
-  const node = el("div"), role = value.indicator || "none", type = value.encode_type || "default";
-  context = {...context, field: value};
-  const stages = [{title: "Role & identity", render: target => {
-    target.append(guidedField(value, "indicator", indexSpec.properties.indicator, path, context, {required: true, controller: true, defaultValue: "none"}));
-    guidedFields(target, value, indexSpec, ["index_number", "key"], path, context);
-  }}];
-  if (role === "none") {
-    stages.push({title: "Encoding", render: target => {
-      target.append(guidedField(value, "encode_type", indexSpec.properties.encode_type, path, context, {required: true, controller: true, defaultValue: "default"}));
-      if (guidedScalarTypes.includes(type)) {
-        const values = type === "signed" ? ["twos_complement", "ones_complement", "sign_magnitude"] : type === "scaled" ? ["default", "unsigned", "twos_complement", "ones_complement", "sign_magnitude"] : ["default", "unsigned"];
-        target.append(guidedField(value, "representation", {kind: "enum", values}, path, context, {required: type === "signed", controller: true}));
-      }
-      if (type === "text" || type === "literal") target.append(guidedField(value, "text_encoding", type === "literal" ? enumeration("default", "ascii_7") : indexSpec.properties.text_encoding, path, context, {controller: true}));
-    }});
-    stages.push({title: "Size & length", render: target => {
-      if (["bits", "octets", "text"].includes(type)) target.append(guidedField(value, "length_from", text, path, context, {controller: true}));
-      if (type === "bool") guidedFixedBitWidth(target, value);
-      else target.append(guidedField(value, "number_of_bits", integer, path, context, {required: true}));
-      if (value.length_from !== undefined && type !== "literal") target.append(guidedField(value, "length_bias", integer, path, context));
-      if (type !== "bits") target.append(guidedField(value, "bit_order", order, path, context));
-      guidedNote(target, type === "literal" || value.length_from !== undefined ? "Capacity is finite; zero capacity is allowed. Lengths use wire code units." : "Set the fixed wire width. Octets and text must contain whole wire code units.");
-    }});
-    stages.push({title: "Constraints", render: target => {
-      if (guidedScalarTypes.includes(type)) guidedFields(target, value, indexSpec, ["allowed", "constant", ...(type === "scaled" ? ["scale"] : [])], path, context, type === "scaled" ? ["scale"] : []);
-      else guidedNote(target, "Raw scalar ranges, constants, and scale do not apply to this encoding.");
-    }});
-    stages.push({title: "Structure & condition", render: target => guidedFields(target, value, indexSpec, ["group_code", "repeat_code", "when"], path, context)});
-  } else {
-    stages.push({title: "Controller", render: target => {
-      guidedNote(target, "Indicators control structure rather than an ordinary mapped value.");
-      guidedFixedBitWidth(target, value, true);
-      if (role === "fpi" || role === "gpi") target.append(guidedField(value, "target", text, path, context, {required: true}));
-      else { target.append(guidedField(value, "repeat_code", text, path, context, {required: true})); guidedNote(target, "Declare a finite positive maximum on the controlled repeat, for example R1(4)."); }
-    }});
-    stages.push({title: "Membership", render: target => guidedFields(target, value, indexSpec, role === "fpi" || role === "gpi" ? ["group_code", "repeat_code"] : ["group_code"], path, context)});
-  }
-  node.append(guidedStepper(path, stages));
-  guidedRepairProperties(node, value, indexSpec, guidedIndexKeys(value), path, context);
-  return node;
-}
-function guidedRepeat(value, path, context) {
-  const node = el("div"), fixed = guidedOwn(value, "count") || !guidedOwn(value, "count_from");
+  const node = el("div"), type = value.type || "unsigned", optional = directlyOptional(selectedIndex);
+  context = {...context, field: value, consumer: value};
   node.append(guidedStepper(path, [
-    {title: "Count mechanism", render: target => {
-      target.append(guidedField(value, "repeat_code", text, path, context, {required: true}));
-      const select = el("select"); select.setAttribute("aria-label", "Repeat count mechanism"); select.add(new Option("Fixed count", "fixed")); select.add(new Option("Preceding scalar", "scalar")); select.value = fixed ? "fixed" : "scalar";
-      select.addEventListener("change", () => guidedController("change repeat count mechanism", removed => {
-        if (select.value === "fixed") { guidedRemove(value, ["count_from", "maximum", "minimum", "bias"], removed); value.count = 0; }
-        else { guidedRemove(value, ["count"], removed); value.count_from = ""; value.maximum = 0; }
-      }));
-      const label = el("label", "property-label", "Count mechanism");
-      label.append(helpButton("repeat count mechanism", "Use a fixed count, including zero, or read the count from an earlier scalar with explicit bounds. A declaration cannot also use an FRI or GRI controller."));
-      target.append(label, select);
+    {title: "Identity", render: target => {
+      guidedNote(target, "Give this field a unique key. Dependencies and mappings follow this key when you move the field; renaming updates those references together.");
+      target.append(guidedField(value, "key", text, path, context, {required: true}));
+      if (fieldNodes(context.message).filter(item => item.node.key === value.key).length > 1) target.append(el("p", "schema-invalid", "This key is duplicated. Rename this field before continuing."));
     }},
-    {title: fixed ? "Fixed count" : "Source & bounds", render: target => guidedFields(target, value, repeatSpec, fixed ? ["count"] : ["count_from", "maximum", "minimum", "bias"], path, context, fixed ? ["count"] : ["count_from", "maximum"])}
+    {title: "Encoding", render: target => {
+      target.append(guidedField(value, "type", fieldSpec.properties.type, path, context, {required: true, controller: true, defaultValue: "unsigned"}));
+      if (type === "text" || type === "literal") target.append(guidedField(value, "text_encoding", type === "literal" ? enumeration("default", "ascii_7") : fieldSpec.properties.text_encoding, path, context, {controller: true}));
+      guidedNote(target, signedTypes.includes(type) ? "This type explicitly chooses the signed integer representation." : type === "bool" ? "Boolean width is implied: one bit." : "Choose the wire type given by your specification.");
+    }},
+    {title: "Size & length", render: target => {
+      if (["bits", "octets", "text"].includes(type)) target.append(guidedField(value, "length_from", text, path, context, {controller: true}));
+      if (type === "bool") {
+        guidedNote(target, "One bit is generated automatically. You do not need to enter its width.");
+        if (guidedOwn(value, "number_of_bits")) {
+          if (value.number_of_bits !== 1) target.append(el("p", "schema-invalid", "The saved boolean width is invalid."));
+          target.append(button("Use implied one-bit width", () => schemaChange("use boolean width", () => { delete value.number_of_bits; })));
+        }
+      } else target.append(guidedField(value, "number_of_bits", integer, path, context, {required: true}));
+      if (guidedOwn(value, "length_from")) target.append(guidedField(value, "length_bias", integer, path, context));
+      if (type !== "bits") target.append(guidedField(value, "bit_order", order, path, context));
+      guidedNote(target, value.length_from !== undefined || type === "literal" ? "Enter the finite capacity in bits. Length comes from the chosen source or literal termination." : "Enter the exact field width in bits from the specification.");
+    }},
+    {title: "Constraints", render: target => {
+      if (guidedScalarTypes.includes(type)) {
+        guidedFields(target, value, fieldSpec, ["allowed", "constant", ...(type === "unsigned" || signedTypes.includes(type) ? ["scale"] : [])], path, context, []);
+        guidedNote(target, "Adding scale supplies its exact rational metadata and makes this a scaled field automatically. Raw constraints still use wire codes.");
+      } else guidedNote(target, "Raw scalar constraints and scale do not apply to this field type.");
+    }},
+    {title: "Condition", render: target => {
+      if (optional) {
+        guidedNote(target, "This field already has its own presence control. A separate condition cannot also control it.");
+        if (guidedOwn(value, "when")) target.append(button("Remove incompatible condition", () => schemaChange("remove incompatible condition", () => { delete value.when; })));
+      } else target.append(guidedField(value, "when", conditionSpec, path, context));
+    }}
   ]));
-  guidedRepairProperties(node, value, repeatSpec, fixed ? ["repeat_code", "count"] : ["repeat_code", "count_from", "maximum", "minimum", "bias"], path, context);
+  guidedRepairProperties(node, value, fieldSpec, guidedIndexKeys(value), path, context);
   return node;
 }
 function guidedCondition(value, path, context) {
-  const node = el("div");
-  node.append(guidedStepper(path, [
-    {title: "Match mode", render: target => guidedFields(target, value, conditionSpec, ["mode", "negate"], path, context)},
-    {title: "Terms", render: target => {
-      guidedNote(target, "Terms compare raw codes from preceding scalar fields. At least one term and one range per term are required. Native validation checks scope and ordering.");
-      target.append(guidedConditionTerms(value, path, context));
-    }}
-  ]));
-  guidedRepairProperties(node, value, conditionSpec, Object.keys(conditionSpec.properties), path, context);
+  const node = el("div"), mode = guidedOwn(value, "any") && !guidedOwn(value, "all") ? "any" : "all";
+  node.dataset.guidedForm = path;
+  const label = el("label", "property-label", "Match condition terms"), select = el("select");
+  select.dataset.property = "condition_mode"; select.setAttribute("aria-label", "Condition match");
+  select.add(new Option("All terms must match", "all")); select.add(new Option("Any term may match", "any")); select.value = mode;
+  select.addEventListener("change", () => schemaChange("change condition mode", () => { const terms = Array.isArray(value[mode]) ? value[mode] : []; delete value.all; delete value.any; value[select.value] = terms; }));
+  node.append(label, select, guidedField(value, "negate", boolean, path, context));
+  if (guidedOwn(value, "all") && guidedOwn(value, "any")) node.append(el("p", "schema-invalid", "Choose a match mode to repair the conflicting all/any arrays."));
+  guidedNote(node, "Choose available earlier scalar fields by key. Add at least one term and one raw-code range per term.");
+  node.append(guidedConditionTerms(value, path, context, mode));
+  guidedRepairProperties(node, value, conditionSpec, ["all", "any", "negate"], path, context);
   return node;
 }
-function guidedConditionTerms(value, path, context) {
-  if (!Array.isArray(value.terms)) return guidedRepairValue(value.terms, conditionSpec.properties.terms, next => { value.terms = next; }, path + "/terms", context);
-  const node = el("div", "guided-array"), spec = conditionSpec.properties.terms.item;
-  value.terms.forEach((term, index) => {
-    const row = el("section", "array-item"), termPath = path + "/terms/" + index;
-    row.append(el("h4", "", "Term " + (index + 1)), button("Delete term", () => schemaChange("delete condition term", () => value.terms.splice(index, 1)), "text-button danger"));
-    if (!isObject(term)) row.append(guidedRepairValue(term, spec, next => { value.terms[index] = next; }, termPath, context));
+function guidedConditionTerms(value, path, context, mode) {
+  const spec = termSpec;
+  if (!Array.isArray(value[mode])) return guidedRepairValue(value[mode], array(spec), next => { value[mode] = next; }, path + "/" + mode, context);
+  const node = el("div", "guided-array");
+  value[mode].forEach((term, index) => {
+    const row = el("section", "array-item"), termPath = path + "/" + mode + "/" + index;
+    row.append(el("h4", "", "Term " + (index + 1)), button("Delete term", () => schemaChange("delete condition term", () => value[mode].splice(index, 1)), "text-button danger"));
+    if (!isObject(term)) row.append(guidedRepairValue(term, spec, next => { value[mode][index] = next; }, termPath, context));
     else {
       row.append(guidedStepper(termPath, [
-        {title: "Source", render: target => { target.append(guidedField(term, "field", text, termPath, context, {required: true})); guidedNote(target, "Enter the index of a preceding scalar, such as 1. Native validation checks that it is available in this scope."); }},
+        {title: "Source", render: target => target.append(guidedField(term, "field", text, termPath, context, {required: true}))},
         {title: "Raw values", render: target => guidedFields(target, term, spec, ["values"], termPath, context)},
         {title: "Mask & negation", render: target => guidedFields(target, term, spec, ["mask", "negate"], termPath, context)}
       ]));
@@ -1116,42 +1310,129 @@ function guidedConditionTerms(value, path, context) {
     }
     node.append(row);
   });
-  node.append(button("+ Add term", () => schemaChange("add condition term", () => value.terms.push({field: "", values: []}))));
+  node.append(button("+ Add term", () => schemaChange("add condition term", () => value[mode].push({field: "", values: []}))));
+  return node;
+}
+function selectNodeObject(message, value) {
+  selectedIndex = null;
+  eachNode(message, (node, path) => { if (node === value && selectedIndex === null) selectedIndex = path; });
+}
+function structuralEdit(label, action) {
+  schemaChange(label, () => { schemaExplanation = ""; action(); schemaSteps.clear(); schemaStepReach.clear(); });
+}
+function wrapSelected(kind) {
+  const message = selectedDefinition()?.messages?.[selectedMessage], value = selectedNode();
+  if (!message || selectedIndex === null) return;
+  structuralEdit("wrap " + nodeTitle(value), () => {
+    let next;
+    if (kind === "group") next = [value];
+    else if (kind === "optional") {
+      if (nodeKind(value) === "field" && guidedOwn(value, "when")) { delete value.when; schemaExplanation = "Removed the field condition because a direct optional field uses its own presence control. Undo restores the condition and previous structure."; }
+      next = {optional: value};
+    } else if (kind === "recurrence") next = {recurrence: {maximum: 1, body: value}};
+    else next = {repeat: kind === "fixed" ? {count: 1, body: value} : {count_from: "", maximum: 1, body: value}};
+    setPath(message, selectedIndex, next); selectNodeObject(message, next);
+  });
+}
+function moveSelected(direction) {
+  const message = selectedDefinition()?.messages?.[selectedMessage], path = selectedIndex?.slice();
+  if (!message || !path) return;
+  const parent = pathValue(message, path.slice(0, -1)), index = path[path.length - 1], value = pathValue(message, path);
+  if (!Array.isArray(parent) || index + direction < 0 || index + direction >= parent.length) return;
+  structuralEdit("move element", () => { [parent[index], parent[index + direction]] = [parent[index + direction], parent[index]]; selectNodeObject(message, value); });
+}
+function unwrapSelected() {
+  const message = selectedDefinition()?.messages?.[selectedMessage], path = selectedIndex?.slice(), value = selectedNode(), kind = nodeKind(value);
+  if (!message || !path) return;
+  structuralEdit(kind === "group" ? "ungroup elements" : "remove wrapper", () => {
+    const parent = pathValue(message, path.slice(0, -1)), key = path[path.length - 1];
+    if (kind === "group") {
+      if (Array.isArray(parent)) { parent.splice(key, 1, ...value); selectedIndex = value.length ? [...path.slice(0, -1), key] : null; }
+      else if (value.length === 1) { setPath(message, path, value[0]); selectNodeObject(message, value[0]); }
+    } else { const body = nodeBody(value); setPath(message, path, body); selectNodeObject(message, body); }
+  });
+}
+function deleteSelected() {
+  const message = selectedDefinition()?.messages?.[selectedMessage], path = selectedIndex?.slice();
+  if (!message || !path) return;
+  structuralEdit("delete element", () => {
+    const parent = pathValue(message, path.slice(0, -1)), key = path[path.length - 1];
+    if (Array.isArray(parent)) { parent.splice(key, 1); selectedIndex = path.length > 2 ? path.slice(0, -1) : null; }
+    else { parent[key] = []; selectedIndex = path; }
+  });
+}
+function guidedContainer(value, path, context) {
+  const node = el("div"), kind = nodeKind(value), body = nodeBody(value);
+  if (kind === "invalid") {
+    guidedNote(node, "This element is malformed. Replace it with a field or a group, or delete it. The saved value is preserved until you choose.");
+    node.append(el("code", "repair-value", json(value) ?? "Missing"), button("Replace with field", () => structuralEdit("repair element", () => { const field = freshField(context.message); setPath(context.message, selectedIndex, field); selectNodeObject(context.message, field); })), button("Replace with group", () => structuralEdit("repair element", () => { const group = [freshField(context.message)]; setPath(context.message, selectedIndex, group); selectNodeObject(context.message, group); })));
+    return node;
+  }
+  if (kind === "group") guidedNote(node, "This ordered group adds no bits by itself. Its children appear below it in the outline. It remains a group even when it contains one field.");
+  else if (kind === "optional") {
+    guidedNote(node, nodeKind(body) === "field" ? "One generated presence bit controls this field. Supply its mapped value to include it." : "One generated presence bit controls this group. Its contents stay together.");
+    guidedRepairProperties(node, value, object({optional: nodeSpec}), ["optional"], path, context);
+  } else {
+    const settings = value[kind];
+    if (!isObject(settings)) { node.append(guidedRepairValue(settings, object({body: nodeSpec}), next => { value[kind] = {...next, ...(kind === "recurrence" ? {maximum: 1} : {count: 1}), body: freshField(context.message)}; }, path + "/" + kind, context)); return node; }
+    const mode = kind === "recurrence" ? "recurrence" : guidedOwn(settings, "count") ? "fixed" : "scalar";
+    const choice = el("select"); choice.setAttribute("aria-label", "Repeat count mechanism"); choice.dataset.property = "repeat_mechanism";
+    for (const [name, label] of [["recurrence", "Recurrence indicator with explicit maximum"], ["fixed", "Fixed count"], ["scalar", "Count from an earlier field"]]) choice.add(new Option(label, name));
+    choice.value = mode;
+    choice.addEventListener("change", () => structuralEdit("change repeat count mechanism", () => {
+      const child = nodeBody(value); delete value.recurrence; delete value.repeat;
+      if (choice.value === "recurrence") value.recurrence = {maximum: 1, body: child};
+      else value.repeat = choice.value === "fixed" ? {count: 1, body: child} : {count_from: "", maximum: 1, body: child};
+      schemaExplanation = "Changed the repetition rule. The body was preserved; Undo restores the previous count settings.";
+    }));
+    node.append(el("label", "property-label", "Repeat count mechanism"), choice);
+    const repeatContext = {...context, consumer: value, recurrence: mode === "recurrence"}, repeatPath = path + "/" + kind;
+    const keys = mode === "fixed" ? ["count"] : mode === "scalar" ? ["count_from", "maximum", "minimum", "bias"] : ["maximum"];
+    for (const key of keys) node.append(guidedField(settings, key, key === "count_from" ? text : integer, repeatPath, repeatContext, {required: ["count", "count_from", "maximum"].includes(key)}));
+    guidedNote(node, mode === "recurrence" ? "The maximum comes from your specification. The selected field or group repeats with generated recurrence bits." : mode === "fixed" ? "Every occurrence uses the same body. Zero is an explicit fixed count." : "Choose the field that supplies the count and enter the permitted maximum. The count field still needs its own input value.");
+    guidedRepairProperties(node, settings, object(Object.fromEntries(["body", ...keys].map(key => [key, key === "body" ? nodeSpec : key === "count_from" ? text : integer]))), ["body", ...keys], repeatPath, repeatContext);
+    guidedRepairProperties(node, value, object({[kind]: nodeSpec}), [kind], path, context);
+  }
+  if (kind === "group" && !value.length || kind !== "group" && body === undefined) guidedNote(node, "This body is empty or missing. Add a field inside before this definition can activate.");
+  const children = el("div", "button-row node-children");
+  children.append(button("Add field inside", () => guidedAddElement("field")), button("Add group inside", () => guidedAddElement("group")));
+  node.append(children);
   return node;
 }
 function renderSchemaEditor() {
   const target = $("schema-editor"), definition = selectedDefinition(); target.replaceChildren();
   const undo = button("Undo", undoSchemaChange, "button small schema-undo"); undo.id = "schema-undo";
-  const history = el("div", "schema-history");
-  history.append(undo, helpButton("schema Undo", "Restore the previous schema edit from this browser session. Unrelated Mapping edits are retained. Restoring a deleted schema restores its removed outputs; undoing schema creation removes outputs that depend on it. Reloading clears this history."));
+  const history = el("div", "schema-history"); history.append(undo, helpButton("schema Undo", "Restore a schema edit, including wrappers, moves, renamed references, and affected mapping controls. Unrelated Mapping edits are retained. Reloading clears this history."));
   target.append(history); updateSchemaUndo();
   if (schemaExplanation) target.append(el("p", "guided-explanation", schemaExplanation));
-  if (!definition) { $("schema-inspector-title").textContent = "Select a definition"; guidedNote(target, "Choose or create a schema. Undo restores schema edits from this editing session."); return; }
+  if (!definition) { $("schema-inspector-title").textContent = "Select a definition"; guidedNote(target, draftSchemas().length ? "Select a schema from the library to edit its fields and groups." : "Choose or create a schema. Add a message, then define its fields and groups in wire order."); return; }
   let current = definition, spec = schemaSpec, title = "Schema properties", context = {};
   if (selectedMessage !== null) {
     current = definition.messages?.[selectedMessage]; spec = nativeMessageSpec; title = "Message properties";
-    if (!current) { selectedMessage = selectedIndex = null; return renderSchemaEditor(); }
+    if (!isObject(current)) { selectedMessage = selectedIndex = null; return renderSchemaEditor(); }
     context.message = current;
-    if (selectedIndex !== null) { current = current.indexes?.[selectedIndex]; spec = indexSpec; title = "Field properties"; context.field = current; }
+    if (selectedIndex !== null) { current = pathValue(current, selectedIndex); spec = nodeKind(current) === "field" ? fieldSpec : nodeSpec; title = nodeTitle(current); context.field = current; }
   }
-  if (!current) { selectedIndex = null; return renderSchemaEditor(); }
   $("schema-inspector-title").textContent = title;
   const native = catalogSchema(selectedSchema);
-  if (native?.valid === false) target.append(el("p", "schema-invalid", native.diagnostic || "Native schema validation failed."));
-  const setCurrent = next => {
-    if (selectedMessage === null) schemaById(selectedSchema).document = next;
-    else if (selectedIndex === null) definition.messages[selectedMessage] = next;
-    else definition.messages[selectedMessage].indexes[selectedIndex] = next;
-  };
-  target.append(guidedValue(current, spec, setCurrent, "schema/" + selectedSchema + "/" + selectedMessage + "/" + selectedIndex, context));
+  if (native?.valid === false) target.append(el("p", "schema-invalid", native.diagnostic || "Complete this schema to activate it."));
+  const path = "schema/" + selectedSchema + "/messages/" + selectedMessage + (selectedIndex ? "/" + pathText(selectedIndex) : "");
+  const setCurrent = next => { if (selectedMessage === null) schemaById(selectedSchema).document = next; else if (selectedIndex === null) definition.messages[selectedMessage] = next; else setPath(definition.messages[selectedMessage], selectedIndex, next); };
+  target.append(spec === nodeSpec ? guidedContainer(current, path, context) : guidedValue(current, spec, setCurrent, path, context));
   if (selectedMessage !== null) {
-    const actions = el("div", "button-row");
+    const actions = el("div", "button-row node-actions");
     if (selectedIndex !== null) {
-      const up = button("Move field up", () => { if (selectedIndex) schemaChange("move field", () => { const fields = definition.messages[selectedMessage].indexes; [fields[selectedIndex - 1], fields[selectedIndex]] = [fields[selectedIndex], fields[selectedIndex - 1]]; selectedIndex--; }); }); up.disabled = selectedIndex === 0;
-      actions.append(up, button("Delete field", () => schemaChange("delete field", () => { definition.messages[selectedMessage].indexes.splice(selectedIndex, 1); selectedIndex = null; }), "text-button danger"));
+      const kind = nodeKind(current), parent = pathValue(context.message, selectedIndex.slice(0, -1)), index = selectedIndex[selectedIndex.length - 1];
+      const up = button("Move element up", () => moveSelected(-1)), down = button("Move element down", () => moveSelected(1));
+      up.disabled = !Array.isArray(parent) || index === 0; down.disabled = !Array.isArray(parent) || index >= parent.length - 1;
+      actions.append(up, down);
+      for (const [kind, label] of [["group", "Wrap in group"], ["optional", "Make optional"], ["recurrence", "Repeat with indicator"], ["fixed", "Repeat fixed times"], ["scalar", "Repeat from field"]]) actions.append(button(label, () => wrapSelected(kind)));
+      if (["optional", "recurrence", "repeat"].includes(kind)) actions.append(button("Remove wrapper", unwrapSelected));
+      if (kind === "group") { const ungroup = button("Ungroup", unwrapSelected); ungroup.disabled = !Array.isArray(parent) && current.length !== 1; actions.append(ungroup); }
+      actions.append(button("Delete element", deleteSelected, "text-button danger"));
     } else {
-      const up = button("Move message up", () => moveSchemaMessage(selectedMessage, -1)); up.disabled = selectedMessage === 0;
-      const down = button("Move message down", () => moveSchemaMessage(selectedMessage, 1)); down.disabled = selectedMessage === definition.messages.length - 1;
+      const up = button("Move message up", () => moveSchemaMessage(selectedMessage, -1)), down = button("Move message down", () => moveSchemaMessage(selectedMessage, 1));
+      up.disabled = selectedMessage === 0; down.disabled = selectedMessage === definition.messages.length - 1;
       actions.append(up, down, button("Delete message", () => deleteSchemaMessage(selectedMessage), "text-button danger"));
     }
     target.append(el("hr", "section-divider"), actions);
@@ -1183,36 +1464,56 @@ function deleteSchemaMessage(index) {
     selectedMessage = selectedIndex = null;
   });
 }
+function uniqueSchemaName(base, numbered = false) {
+  let suffix = 1, name = numbered ? base + "-1" : base;
+  while (schemaById(name)) name = base + "-" + (++suffix);
+  return name;
+}
 function guidedAddSchema() {
-  schemaChange("new schema (also removes its outputs)", () => {
-    const schema = {id: uid("schema"), document: {format: "vmf-schema/1", messages: []}};
+  schemaChange("new schema", () => {
+    const schema = {id: uniqueSchemaName("payload", true), document: {format: "vmf-schema/1", messages: []}};
     workspace.schemas.push(schema); selectedSchema = schema.id; selectedMessage = selectedIndex = null; schemaExplanation = "";
   });
 }
 function guidedAddMessage() {
   const definition = selectedDefinition(); if (!definition) return;
   if (!Array.isArray(definition.messages)) { message("Repair the messages array before adding a message.", true); return; }
-  schemaChange("new message", () => { definition.messages.push({message_number: "", indexes: []}); selectedMessage = definition.messages.length - 1; selectedIndex = null; schemaExplanation = ""; });
+  schemaChange("new message", () => { definition.messages.push({message_number: "", elements: []}); selectedMessage = definition.messages.length - 1; selectedIndex = null; schemaExplanation = ""; });
 }
-function guidedAddIndex() {
-  const msg = selectedDefinition()?.messages?.[selectedMessage]; if (!msg) return;
-  if (!Array.isArray(msg.indexes)) { message("Repair the indexes array before adding a field.", true); return; }
-  schemaChange("new field", () => {
-    const used = new Set(msg.indexes.filter(isObject).map(field => String(field.index_number).replace(/\.$/, "")));
-    let number = 1; while (used.has(String(number))) number++;
-    msg.indexes.push({index_number: number + ".", number_of_bits: 1}); selectedIndex = msg.indexes.length - 1; schemaExplanation = "";
+function guidedAddElement(kind) {
+  const message = selectedDefinition()?.messages?.[selectedMessage]; if (!message) return;
+  if (!Array.isArray(message.elements)) { messageNotice("Repair the elements array before adding a field or group."); return; }
+  structuralEdit("add " + kind, () => {
+    const field = freshField(message), next = kind === "group" ? [field] : field, selected = selectedNode(), selectedKind = nodeKind(selected);
+    if (selectedIndex === null) message.elements.push(next);
+    else if (Array.isArray(selected)) selected.push(next);
+    else if (["optional", "repeat", "recurrence"].includes(selectedKind)) {
+      const body = nodeBody(selected), key = selectedKind === "optional" ? [...selectedIndex, "optional"] : [...selectedIndex, selectedKind, "body"];
+      if (Array.isArray(body)) body.push(next); else setPath(message, key, body === undefined ? [next] : [body, next]);
+    } else {
+      const parent = pathValue(message, selectedIndex.slice(0, -1)), key = selectedIndex[selectedIndex.length - 1];
+      if (Array.isArray(parent)) parent.splice(key + 1, 0, next); else setPath(message, selectedIndex, [selected, next]);
+    }
+    selectNodeObject(message, next);
   });
 }
+function guidedAddIndex() { guidedAddElement("field"); }
 async function guidedImportSchema(event) {
   const file = event.target.files[0]; if (!file) return;
   try {
     if (file.size > 16 * 1024 * 1024) throw new Error("Schema exceeds 16 MiB.");
     const document = parseJSON(await file.text());
     if (document.format !== "vmf-schema/1" || !Array.isArray(document.messages)) throw new Error("Choose a native vmf-schema/1 definition.");
-    let id = file.name.replace(/\.json$/i, "") || uid("schema");
-    while (schemaById(id)) id = uid(id);
-    schemaChange("import schema (also removes its outputs)", () => { workspace.schemas.push({id, document}); selectedSchema = id; selectedMessage = selectedIndex = null; schemaExplanation = ""; });
-    message("Schema imported. Native validation runs when the draft is saved.");
+    const existing = draftSchemas().find(schema => canonical(schema.document) === canonical(document));
+    if (existing) {
+      selectedSchema = existing.id; selectedMessage = selectedIndex = null;
+      renderSchemas(); renderSchemaEditor();
+      message("This definition is already in your library. Selected " + existing.id + ". Your mappings are unchanged.");
+    } else {
+      const id = uniqueSchemaName(file.name.replace(/\.json$/i, "") || "payload");
+      schemaChange("import schema", () => { workspace.schemas.push({id, document}); selectedSchema = id; selectedMessage = selectedIndex = null; schemaExplanation = ""; });
+      message("Schema imported as " + id + ". Validation runs when the draft is saved.");
+    }
   } catch (error) { message(error.message, true); }
   event.target.value = "";
 }
@@ -1392,8 +1693,8 @@ function ensureOutput(schema, message) {
   return createOutput(schema, message);
 }
 function messageNotice(text) { $("toast").hidden = false; $("toast").textContent = text; $("toast").classList.remove("error"); }
-function mappingTarget(field) { return {index: field.index}; }
-function refMatches(reference, field) { return isObject(reference) && (reference.key !== undefined ? reference.key === field.key : String(Array.isArray(reference.index) ? reference.index.join(".") : reference.index).replace(/\.$/, "") === field.index.replace(/\.$/, "")); }
+function mappingTarget(field) { return {key: field.key}; }
+function refMatches(reference, field) { return isObject(reference) && typeof reference.key === "string" && reference.key === field.key; }
 function findField(schemaId, message, reference) { return (message.fields || []).find(field => refMatches(reference, field)); }
 function wireRecords() {
   const records = [];
@@ -1520,13 +1821,14 @@ function renderMapping() {
       addOutput.setAttribute("aria-label", "Add output for " + schema.id + " message " + msg.ordinal);
       heading.append(title, addOutput); box.append(heading);
       for (const field of msg.fields || []) {
+        if (!field.mappable || !field.key) continue;
         const port = button("", () => {
           if (armedSource && field.mappable) connect(armedSource, schema.id, msg, field);
           else inspectMessage(schema.id, msg);
         }, "target-port");
-        port.dataset.schemaId = schema.id; port.dataset.messageOrdinal = msg.ordinal; port.dataset.targetIndex = field.index;
+        port.dataset.schemaId = schema.id; port.dataset.messageOrdinal = msg.ordinal; port.dataset.targetIndex = field.index; port.dataset.targetKey = field.key;
         port.dataset.mappable = field.mappable ? "true" : "false";
-        const copy = el("span", "port-copy"); copy.append(el("span", "field-path", field.index + (field.key ? "  " + field.key : "")), el("span", "field-meta", field.bits + " bits · " + field.kind + (field.mappable ? "" : " · structural") + (field.repeats?.length ? " · repeated" : "")));
+        const copy = el("span", "port-copy"); copy.append(el("span", "field-path", field.key), el("span", "field-meta", field.bits + " bits · " + field.kind + (field.mappable ? "" : " · structural") + (field.repeats?.length ? " · repeated" : "")));
         port.append(el("span", "port-dot"), copy);
         port.addEventListener("focus", () => {
           if (!armedSource) return;
@@ -1568,7 +1870,7 @@ function drawWires() {
     existing.delete(wire.id);
     const node = path(a, b, "wire" + (selectedWire === wire.id ? " selected" : "") + (live ? " live" : "") + (wireHasDiagnostic(wire) ? " diagnostic-wire" : ""), previous); node.dataset.wireId = wire.id;
     node.setAttribute("visibility", visible(source) && visible(target) ? "visible" : "hidden");
-    node.setAttribute("role", "button"); node.setAttribute("tabindex", "0"); node.setAttribute("aria-label", wire.binding.cot + " to " + wire.field.index);
+    node.setAttribute("role", "button"); node.setAttribute("tabindex", "0"); node.setAttribute("aria-label", wire.binding.cot + " to " + wire.field.key);
     node.setAttribute("aria-pressed", String(selectedWire === wire.id));
     if (!previous) {
       const select = () => { cancelPendingConnection(); selectedWire = node.dataset.wireId; selectedOutput = null; renderOutputs(); renderMappingEditor(); scheduleWires(); };
@@ -1595,7 +1897,7 @@ function renderMappingEditor() {
   const wire = wireRecords().find(item => item.id === selectedWire);
   if (wire) {
     $("mapping-inspector-title").textContent = "Connection properties";
-    target.append(el("div", "selected-target", wire.binding.cot + " → " + wire.field.index), editor(wire.binding, bindingSpec, next => { wire.output.mapping.fields[wire.index] = next; }, "", "wire/" + wire.id), button("Remove connection", removeSelectedConnection, "button wide-button danger"));
+    target.append(el("div", "selected-target", wire.binding.cot + " → " + wire.field.key), editor(wire.binding, bindingSpec, next => { wire.output.mapping.fields[wire.index] = next; }, "", "wire/" + wire.id), button("Remove connection", removeSelectedConnection, "button wide-button danger"));
     return;
   }
   const output = draftOutputs().find(item => item.id === selectedOutput);
@@ -1684,7 +1986,7 @@ function tab(name) {
   document.querySelectorAll("[data-tab]").forEach(node => node.classList.toggle("selected", node.dataset.tab === name));
   $("mapping-page").hidden = workspaceNeedsRepair() || name !== "mapping"; $("schemas-page").hidden = workspaceNeedsRepair() || name !== "schemas";
   $("page-title").textContent = name === "mapping" ? "Connect the fields." : "Define your payloads.";
-  $("page-description").textContent = name === "mapping" ? "Connect the data your message needs. Saved edits are tested with incoming CoT." : "Build native VMF definitions. Your schemas provide every payload field.";
+  $("page-description").textContent = name === "mapping" ? "Connect the data your message needs. Saved edits are tested with incoming CoT." : "Build your payload in wire order. Nest optional and repeating fields or groups.";
   scheduleWires();
 }
 function download(name, value) {
@@ -1760,6 +2062,7 @@ document.addEventListener("keydown", event => {
 $("add-schema").addEventListener("click", guidedAddSchema);
 $("add-message").addEventListener("click", guidedAddMessage);
 $("add-index").addEventListener("click", guidedAddIndex);
+$("add-group").addEventListener("click", () => guidedAddElement("group"));
 $("import-schema").addEventListener("change", guidedImportSchema);
 $("export-schema").addEventListener("click", () => { const schema = schemaById(selectedSchema); if (schema) download(schema.id + ".json", schema.document); });
 $("delete-schema").addEventListener("click", guidedDeleteSchema);

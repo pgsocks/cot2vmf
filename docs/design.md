@@ -16,6 +16,13 @@ structure and encoding; this project does not implement a second payload
 codec. Physical-to-raw numeric conversion remains the translator's task.
 Exact arithmetic and range checks preserve the source and target domains.
 
+Payload JSON uses native nested `elements`, fields, and structural wrappers.
+The VMF loader alone generates numeric addresses, controller rows, memberships,
+and group/repeat identifiers. This application binds data fields by required
+message-local keys, so moving a field cannot silently redirect its mapping.
+Schema diagnostics retain native source pointers instead of requiring an
+operator to reconstruct an authored location from generated index positions.
+
 One active configuration contains several independent output plans. Every
 enabled plan processes the same decoded event. This matches the field-wiring
 workflow without introducing routing predicates. A failed plan suppresses its

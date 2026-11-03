@@ -65,6 +65,91 @@ artifacts without test tooling.
 Workspace and mapping documents use format version 1. Embedded native payload
 documents use `vmf-schema/1`.
 
+## Author a payload in the browser
+
+The schema library holds your definitions. A library name such as `payload-1`
+is a workspace label. A message number such as `K01.1` identifies a message
+inside that definition. A standard edition such as `MIL-STD-6017B` identifies
+the specification you are transcribing. Choose the edition and message number
+from your source document; they are separate settings.
+When returning to the editor, select an existing library entry to open it.
+
+For a synthetic walkthrough, open **Payload schemas** and:
+
+1. Click **+ New schema**. In **Schema properties**, leave the optional envelope
+   default unset, then choose the named edition `MIL-STD-6017B` under
+   **Standard**. Outputs will select their own envelopes.
+2. Click **+ Message** and enter `K01.1` in **Message number**. The new message
+   stays an invalid draft until its required number is supplied.
+3. Click **+ Add field**. Under **Identity**, change its key to `battery`.
+   Under **Encoding**, use `unsigned`; under **Size & length**, enter `8` bits.
+   The remaining constraint and condition settings are optional.
+4. With `battery` selected, click **Wrap in group**, then **Make optional**.
+   The outline now shows **Optional group → Group · 1 element → battery**.
+   A group stays a group even when it contains only one field.
+5. Click **Export native schema** to save the definition as JSON. Importing
+   the identical definition again selects the existing library entry. A
+   different definition is imported as a new entry; it does not replace an
+   existing schema or its mappings.
+
+Leave an input or press Tab to commit its value. **Changes saved** confirms the
+edit was stored. Invalid imported definitions remain saved drafts, with errors
+pointing to their nested JSON locations; the previous active configuration
+continues running. Invalid keys and widths entered through the editor are
+rejected before changing the definition.
+
+Arrays in the exported JSON preserve wire order. Nesting determines group
+membership and generates presence and recurrence indicators. You do not enter
+field indexes, group/repeat codes, indicator targets, or indicator widths.
+Every data field has a unique key within its message. Boolean width is implied;
+other widths and text/binary capacities are explicitly measured in bits.
+For example, the optional group above exports as:
+
+```json
+{
+  "format": "vmf-schema/1",
+  "message_standard": "MIL-STD-6017B",
+  "messages": [{
+    "message_number": "K01.1",
+    "elements": [{
+      "optional": [{"key": "battery", "number_of_bits": 8}]
+    }]
+  }]
+}
+```
+
+These values describe a synthetic layout, not an assigned operational message.
+
+To construct repeated or larger regions:
+
+- Select a group or wrapper, then use **+ Add field inside** or
+  **+ Add group inside**. Select the message row to add at the message level.
+- Select an element and use **Move element up/down** to change its wire order.
+- For two occurrences, each containing an optional group, select the
+  **Optional group** row, click **Repeat fixed times**, and set **Count** to `2`.
+  The outline becomes **Fixed repeat → Optional group → Group → battery**.
+  Wrapping the repeat in **Make optional** instead controls the whole repeat.
+- **Repeat with indicator** requires an explicit positive **Maximum**.
+  **Repeat from field** requires an earlier count field and an explicit
+  **Maximum**. Field-length and condition sources are also selected by key.
+  The source chooser lists fields available at that point in the structure.
+- **Remove wrapper** keeps its contents. **Delete element** removes the selected
+  region. **Undo** restores the last schema edit, including affected references.
+  Reloading keeps saved edits but clears the browser session's Undo history.
+
+On **Field mapping**, click `detail.status.battery`, then the VMF `battery`
+target, or drag between their ports. The connection creates a disabled output;
+select that output, choose envelope `C`, then enable it. An unmapped optional
+group can remain absent. Required fields and repeated occurrences need values;
+use **Header & controls** for constants, presence controls, explicit recurrence
+counts, and occurrence selections. Incoming CoT drives **Last test result**;
+**Waiting for traffic** means no event has tested that configuration yet.
+
+Connections use field keys. Renaming a key in the editor updates its schema
+references and connections; reordering fields does not change their targets.
+Edits that remove required repeat/group context disable affected outputs and
+explain what needs review. Check those outputs before enabling them again.
+
 ## Docker and background operation
 
 ```sh

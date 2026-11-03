@@ -24,6 +24,13 @@ ordinary number range.
 A schema entry is `{ "id": "position", "document": { ... } }`. `document`
 is an unmodified native `vmf-schema/1` object; use the VMF repository's
 [schema reference][schema] for fields, profiles, structures, and validation.
+Messages contain ordered `elements`. A field requires a nonempty `key`,
+unique throughout that message, and a bit width (optional for `type: "bool"`).
+Arrays group elements; `optional`, `recurrence`, and `repeat` wrappers express
+structure. `recurrence` declares a finite maximum; `repeat` declares either
+an explicit count or a count-source key and finite maximum. Length sources and
+condition terms also reference field keys. A field's `type` names its wire
+encoding; `scale` selects scaled data with that raw integer representation.
 Labels, notes, and conversion behavior are not added to that native dialect.
 All schema definitions must validate before the whole workspace can activate.
 Native schemas may omit their envelope default. Each output independently
@@ -73,9 +80,11 @@ authentication generation and compression are unsupported.
 
 ## Bindings and values
 
-`fields` entries name canonical CoT catalog paths. A VMF target is either
-`{"key":"application-key"}` or `{"index":"3.1"}`; numeric index arrays
-are also accepted. Keys must resolve uniquely within the selected message.
+`fields` entries name canonical CoT catalog paths. A VMF target is
+`{"key":"application-key"}`. The key must resolve within the selected
+message; numeric index destinations are rejected. Generated index addresses
+are inspection metadata and can change when schema elements move. Key-based
+field bindings survive those moves without being redirected to another field.
 A source may feed multiple targets. Each target occurrence has one writer.
 Indicators are structural controls rather than ordinary data targets.
 
@@ -123,11 +132,13 @@ Length/count scalars and mandatory values must be supplied explicitly.
 Inside repeats, bindings and constants carry every enclosing occurrence:
 
 ```json
-{"cot":"point.latitude", "vmf":{"index":"3.1"},
+{"cot":"point.latitude", "vmf":{"key":"latitude"},
  "occurrences":[{"repeat":1,"index":0},{"repeat":2,"index":1}]}
 ```
 
-Occurrence indexes are zero-based and ordered outermost first. `presence`
+Occurrence indexes are zero-based and ordered outermost first. Repeat and
+group identifiers come from the native catalog in wrapper preorder; revise
+structural assertions when changing that structure. `presence`
 assertions apply only to GPI-controlled groups; absent assertions allow native
 inference from supplied descendants. `repeat_counts` assertions apply only to
 FRI/GRI-driven recurrence. Fixed and preceding-scalar repeats remain governed

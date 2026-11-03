@@ -8,13 +8,10 @@
         "messages": [
           {
             "message_number": "K01.1",
-            "indexes": [
+            "elements": [
               {
-                "index_number": "1.",
                 "key": "latitude",
                 "number_of_bits": 32,
-                "encode_type": "scaled",
-                "representation": "twos_complement",
                 "scale": {
                   "factor": {
                     "numerator": 1,
@@ -24,14 +21,12 @@
                     "numerator": 0,
                     "denominator": 1
                   }
-                }
+                },
+                "type": "twos_complement"
               },
               {
-                "index_number": "2.",
                 "key": "longitude",
                 "number_of_bits": 32,
-                "encode_type": "scaled",
-                "representation": "twos_complement",
                 "scale": {
                   "factor": {
                     "numerator": 1,
@@ -41,25 +36,22 @@
                     "numerator": 0,
                     "denominator": 1
                   }
-                }
+                },
+                "type": "twos_complement"
               },
               {
-                "index_number": "3.",
                 "key": "identifier",
                 "number_of_bits": 224,
-                "encode_type": "literal"
+                "type": "literal"
               }
             ]
           },
           {
             "message_number": "K01.2",
-            "indexes": [
+            "elements": [
               {
-                "index_number": "1.",
                 "key": "latitude",
                 "number_of_bits": 32,
-                "encode_type": "scaled",
-                "representation": "twos_complement",
                 "scale": {
                   "factor": {
                     "numerator": 1,
@@ -69,14 +61,12 @@
                     "numerator": 0,
                     "denominator": 1
                   }
-                }
+                },
+                "type": "twos_complement"
               },
               {
-                "index_number": "2.",
                 "key": "longitude",
                 "number_of_bits": 32,
-                "encode_type": "scaled",
-                "representation": "twos_complement",
                 "scale": {
                   "factor": {
                     "numerator": 1,
@@ -86,13 +76,13 @@
                     "numerator": 0,
                     "denominator": 1
                   }
-                }
+                },
+                "type": "twos_complement"
               },
               {
-                "index_number": "3.",
                 "key": "identifier",
                 "number_of_bits": 224,
-                "encode_type": "literal"
+                "type": "literal"
               }
             ]
           }

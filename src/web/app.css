@@ -1220,3 +1220,16 @@ footer {
 .derived-header summary { font-size: 12px; cursor: pointer; }
 .derived-identity { font-size: 11px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .output-envelope select { width: 100%; }
+
+.tree-select.schema-node { padding-left: calc(12px + var(--node-depth, 0) * 14px); overflow-wrap: anywhere; }
+.schema-node.group,.schema-node.optional,.schema-node.recurrence,.schema-node.repeat { color: var(--orange, #edab71); font-weight: 600; }
+.schema-node.invalid { color: #f0a594; }
+.schema-add-actions { padding-top: 12px; gap: 6px; flex-wrap: wrap; }
+.schema-add-actions button { flex: 1; min-width: 100px; }
+.node-actions { display: flex; flex-wrap: wrap; gap: 7px; }
+.node-actions button { text-align: left; }
+.node-children { margin-top: 16px; flex-wrap: wrap; gap: 7px; }
+.guided-array > .property-label { margin-top: 12px; }
+
+.pending-input { display: block; margin-top: 6px; color: var(--orange, #edab71); font-size: 11px; line-height: 1.4; }
+.pending-input[hidden] { display: none; }

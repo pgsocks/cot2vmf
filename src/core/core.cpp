@@ -107,12 +107,27 @@ bool cv_schema_load(yyjson_val *document, vmf_schema_json_document **owner,
 	std::free(text);
 	if (status == VMF_OK)
 		return true;
-	char message[512];
+	char message[768];
+	int length = std::snprintf(message, sizeof(message),
+		"invalid VMF schema: %s (%s)%s%s%s%s%s%s",
+		diagnostic.message, vmf_status_string(status),
+		diagnostic.path[0] ? "; at " : "", diagnostic.path,
+		diagnostic.path_truncated ? " [truncated]" : "",
+		diagnostic.related_path[0] ? "; related " : "",
+		diagnostic.related_path,
+		diagnostic.related_path_truncated ? " [truncated]" : "");
 
-	std::snprintf(message, sizeof(message),
-		      "invalid VMF schema: %s (%s); message %zu, index %zu",
-		      diagnostic.message, vmf_status_string(status),
-		      diagnostic.schema_index, diagnostic.index_position);
+	if (length >= static_cast<int>(sizeof(message))) {
+		/* Paths are valid UTF-8. Keep a complete prefix if both source
+		 * locations exceed the service diagnostic's fixed capacity.
+		 */
+		size_t used = sizeof(message) - 4;
+
+		while (used &&
+			(static_cast<unsigned char>(message[used]) & 0xc0) == 0x80)
+			--used;
+		std::memcpy(message + used, "...", 4);
+	}
 	cv_fail(error,
 		status == VMF_OUT_OF_MEMORY ? CV_OUT_OF_MEMORY
 					    : CV_INVALID_CONFIG,

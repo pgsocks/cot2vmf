@@ -34,8 +34,7 @@ struct catalog_owner {
 std::string message(const std::string &standard)
 {
 	return "{\"message_number\":\"K01.1\"," + standard +
-		"\"indexes\":[{\"index_number\":\"1.\",\"number_of_bits\":8,"
-		"\"key\":\"value\"}]}";
+		R"("elements":[{"number_of_bits":8,"key":"value"}]})";
 }
 
 std::string workspace(const std::string &messages,
@@ -98,6 +97,23 @@ void expect_unavailable(yyjson_val *message, const char *profile)
 	EXPECT_GT(yyjson_get_len(diagnostic), 0u);
 	EXPECT_TRUE(yyjson_is_null(yyjson_obj_get(value, "identity")));
 	EXPECT_TRUE(yyjson_is_null(yyjson_obj_get(value, "header")));
+}
+
+TEST(Catalog, LengthSourcesUseStableFieldKeys)
+{
+	std::string source = workspace(
+		R"({"message_number":"K01.1","elements":[)"
+		R"({"key":"length","number_of_bits":8},)"
+		R"({"key":"data","type":"bits","number_of_bits":8,)"
+		R"("length_from":"length"}]})", R"("standard_version":0,)");
+	catalog_owner owner;
+
+	ASSERT_EQ(CV_OK, owner.load(source));
+	auto *fields = yyjson_obj_get(catalog_message(&owner, 0), "fields");
+	auto *data = yyjson_arr_get(fields, 1);
+
+	EXPECT_TRUE(yyjson_equals_str(yyjson_obj_get(data, "length_from"),
+		"length"));
 }
 
 TEST(Catalog, PortableMessageSharesFieldsAcrossFourEnvelopeVariants)

@@ -110,86 +110,23 @@ static bool parse_selector(bridge_context *ctx, yyjson_val *json,
 	return true;
 }
 
-static bool parse_index(bridge_context *ctx, yyjson_val *value,
-			vmf_index_number *number)
-{
-	uint32_t parts[BRIDGE_MAX_DEPTH];
-	size_t count = 0;
-
-	if (yyjson_is_arr(value)) {
-		yyjson_arr_iter iter = yyjson_arr_iter_with(value);
-		yyjson_val *part;
-
-		while ((part = yyjson_arr_iter_next(&iter))) {
-			uint64_t n;
-
-			if (count == BRIDGE_MAX_DEPTH ||
-			    !uint_value(part, &n) || n > UINT32_MAX)
-				return bridge_fail(ctx,
-						   "invalid VMF index array");
-			parts[count++] = static_cast<uint32_t>(n);
-		}
-	} else if (string(value)) {
-		const char *p = yyjson_get_str(value);
-
-		while (*p) {
-			if (*p < '0' || *p > '9' || count == BRIDGE_MAX_DEPTH)
-				return bridge_fail(ctx, "invalid VMF index");
-			uint64_t n = 0;
-
-			while (*p >= '0' && *p <= '9') {
-				n = n * 10 + static_cast<unsigned>(*p++ - '0');
-				if (n > UINT32_MAX)
-					return bridge_fail(
-					    ctx, "VMF index overflow");
-			}
-			parts[count++] = static_cast<uint32_t>(n);
-			if (*p && *p++ != '.')
-				return bridge_fail(ctx, "invalid VMF index");
-		}
-	} else {
-		return bridge_fail(ctx, "VMF index must be string or array");
-	}
-	if (!count)
-		return bridge_fail(ctx, "empty VMF index");
-	auto *copy = static_cast<uint32_t *>(
-	    bridge_alloc(ctx, count * sizeof(uint32_t)));
-
-	if (!copy)
-		return false;
-	std::memcpy(copy, parts, count * sizeof(*copy));
-	*number = {copy, count};
-	return true;
-}
-
 static const vmf_index_schema *reference(bridge_context *ctx, yyjson_val *value)
 {
-	static const char *const allowed[] = {"key", "index"};
+	static const char *const allowed[] = {"key"};
 
-	if (!keys(ctx, value, allowed, 2))
+	if (!keys(ctx, value, allowed, 1))
 		return nullptr;
 	yyjson_val *key = yyjson_obj_get(value, "key");
-	yyjson_val *index = yyjson_obj_get(value, "index");
-	const vmf_index_schema *result = nullptr;
 
-	if (!!key == !!index) {
-		bridge_fail(ctx,
-			    "VMF reference needs exactly one key or index");
+	if (!string(key)) {
+		bridge_fail(ctx, "VMF reference requires a nonempty field key");
 		return nullptr;
 	}
-	if (key && string(key)) {
-		vmf_string name = {yyjson_get_str(key), yyjson_get_len(key)};
+	vmf_string name = {yyjson_get_str(key), yyjson_get_len(key)};
+	const vmf_index_schema *result = vmf_schema_find_key(ctx->message, name);
 
-		result = vmf_schema_find_key(ctx->message, name);
-	} else if (index) {
-		vmf_index_number number = {};
-
-		if (!parse_index(ctx, index, &number))
-			return nullptr;
-		result = vmf_schema_find(ctx->message, number);
-	}
 	if (!result || result->indicator != VMF_INDICATOR_NONE) {
-		bridge_fail(ctx, "VMF reference is unknown or is an indicator");
+		bridge_fail(ctx, "VMF field key is unknown");
 		return nullptr;
 	}
 	return result;

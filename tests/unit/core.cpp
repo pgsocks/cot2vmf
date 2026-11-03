@@ -25,17 +25,15 @@ std::string event(const std::string &detail = "")
 	       detail + "</event>";
 }
 
-std::string schema(const std::string &indexes,
+std::string schema(const std::string &elements,
 		   const std::string &properties = "")
 {
-	return "{\"format\":\"vmf-schema/1\","
-	       "\"message_standard\":\"MIL-STD-6017B\","
-	       "\"messages\":[{\"message_number\":\"K01.1\",\"indexes\":[" +
-	       indexes + "]" + properties + "}]}";
+	return R"({"format":"vmf-schema/1","message_standard":"MIL-STD-6017B",)"
+		R"("messages":[{"message_number":"K01.1","elements":[)" +
+	       elements + "]" + properties + "}]}";
 }
 
-const char field[] = "{\"index_number\":\"1.\",\"key\":\"value\","
-		     "\"number_of_bits\":8}";
+const char field[] = R"({"key":"value","number_of_bits":8})";
 
 std::string mapping(const std::string &fields, const std::string &extra = "")
 {
@@ -242,6 +240,44 @@ std::string replace(std::string value, const std::string &before,
 	return value;
 }
 
+TEST(Core, NestedSchemaDiagnosticsIdentifyPrimaryAndRelatedSources)
+{
+	owner unknown;
+	std::string definition = schema(
+		R"({"optional":{"key":"v","type":"bits",)"
+		R"("number_of_bits":8,"length_from":"missing"}})");
+
+	EXPECT_EQ(CV_INVALID_CONFIG,
+		unknown.load(workspace(definition, "")));
+	EXPECT_NE(std::string::npos, std::string(unknown.error.message).find(
+		"/messages/0/elements/0/optional/length_from"));
+	owner duplicate;
+
+	definition = schema(R"({"key":"v","number_of_bits":8},)"
+		R"({"optional":{"key":"v","number_of_bits":8}})");
+	EXPECT_EQ(CV_INVALID_CONFIG,
+		duplicate.load(workspace(definition, "")));
+	std::string diagnostic = duplicate.error.message;
+
+	EXPECT_NE(std::string::npos, diagnostic.find(
+		"/messages/0/elements/1/optional/key"));
+	EXPECT_NE(std::string::npos, diagnostic.find(
+		"/messages/0/elements/0/key"));
+}
+
+TEST(Core, MappingDestinationsRequireStableFieldKeys)
+{
+	for (const char *target : {R"({"index":"1"})", R"({"index":[1]})"}) {
+		owner loaded;
+		std::string binding =
+			R"({"cot":"point.latitude","vmf":)" +
+			std::string(target) + "}";
+
+		EXPECT_EQ(CV_INVALID_CONFIG, loaded.load(workspace(schema(field),
+			output("numeric", mapping(binding)))));
+	}
+}
+
 TEST(Core, ReceiveOnlyDecodesAndReportsPresentFields)
 {
 	cv_activity activity = {};
@@ -263,16 +299,11 @@ TEST(Core, ReceiveOnlyDecodesAndReportsPresentFields)
 
 TEST(Core, SubsetFeedbackReportsSuccessfulIntendedOutput)
 {
-	std::string definition = schema(
-		std::string(field) +
-		",{\"index_number\":\"2.\",\"indicator\":\"fpi\","
-		"\"target\":\"2.1\"},{\"index_number\":\"2.1\","
-		"\"key\":\"optional\",\"number_of_bits\":14,"
-		"\"encode_type\":\"literal\"},{\"index_number\":\"3.\","
-		"\"number_of_bits\":8,\"when\":{\"mode\":\"all\",\"terms\":[{"
-		"\"field\":\"1.\",\"values\":[{\"first\":1,\"last\":1}]}]}},"
-		"{\"index_number\":\"4.\",\"key\":\"fixed\","
-		"\"number_of_bits\":8}");
+	std::string definition = schema(std::string(field) +
+		R"(,{"optional":{"key":"optional","number_of_bits":14,)"
+		R"("type":"literal"}},{"key":"conditional","number_of_bits":8,)"
+		R"("when":{"all":[{"field":"value","values":[{"first":1,)"
+		R"("last":1}]}]}},{"key":"fixed","number_of_bits":8})");
 	std::string extra = ",\"vmf_constants\":[{\"vmf\":{\"key\":\"fixed\"},"
 			    "\"value\":7}]";
 	owner loaded;
@@ -389,9 +420,8 @@ TEST(Core, FeedbackIsPerOutputAndPreservesFirstErrorAndRecovery)
 TEST(Core, FeedbackDoesNotInventLocationForOversizedMessage)
 {
 	std::string definition =
-		schema("{\"index_number\":\"1.\",\"key\":\"value\","
-		       "\"number_of_bits\":524064,\"encode_type\":\"text\","
-		       "\"text_encoding\":\"ascii_8\"}");
+		schema(R"({"key":"value","number_of_bits":524064,"type":"text",)"
+			R"("text_encoding":"ascii_8"})");
 	std::string extra = ",\"vmf_constants\":[{\"vmf\":{\"key\":\"value\"},"
 			    "\"value\":\"" +
 			    std::string(65508, 'A') + "\"}]";
@@ -527,11 +557,9 @@ TEST(Core, RuntimeOptionsCannotBeStoredInWorkspace)
 
 TEST(Core, OptionalSourceCannotLeakAcrossEvents)
 {
-	std::string definition =
-		schema("{\"index_number\":\"1.\",\"indicator\":\"fpi\","
-		       "\"target\":\"1.1\"},{\"index_number\":\"1.1\","
-		       "\"key\":\"value\",\"encode_type\":\"literal\",\"number_"
-		       "of_bits\":14}");
+	std::string definition = schema(
+		R"({"optional":{"key":"value","type":"literal",)"
+		R"("number_of_bits":14}})");
 	std::string binding = "{\"cot\":\"detail.contact.callsign\","
 			      "\"vmf\":{\"key\":\"value\"}}";
 	owner loaded;
@@ -604,10 +632,9 @@ TEST(Core, FailedPublicationDoesNotBlockOtherOutputs)
 TEST(Core, ScaleAndBindingTransformsEncodeCheckedRawCodes)
 {
 	std::string definition = schema(
-		"{\"index_number\":\"1.\",\"key\":\"value\","
-		"\"number_of_bits\":16,\"encode_type\":\"scaled\","
-		"\"scale\":{\"factor\":{\"numerator\":1,\"denominator\":10},"
-		"\"bias\":{\"numerator\":0,\"denominator\":1}}}");
+		R"({"key":"value","number_of_bits":16,)"
+			R"("scale":{"factor":{"numerator":1,"denominator":10},)"
+			R"("bias":{"numerator":0,"denominator":1}}})");
 	std::string binding =
 		"{\"cot\":\"point.latitude\","
 		"\"vmf\":{\"key\":\"value\"},\"factor\":2,\"offset\":2}";
@@ -627,12 +654,11 @@ TEST(Core, ScaleAndBindingTransformsEncodeCheckedRawCodes)
 		  decode(definition, target.packets[0]).values);
 }
 
-TEST(Core, LookupAndRepeatConstantsRetainOriginalMappingContract)
+TEST(Core, LookupAndFixedRepeatsRetainExactValues)
 {
-	std::string definition =
-		schema("{\"index_number\":\"1.\",\"key\":\"value\","
-		       "\"number_of_bits\":8,\"repeat_code\":\"R1\"}",
-		       ",\"repeats\":[{\"repeat_code\":\"R1\",\"count\":2}]");
+	std::string definition = schema(
+		R"({"repeat":{"count":2,"body":{"key":"value",)"
+		R"("number_of_bits":8}}})");
 	std::string binding =
 		"{\"cot\":\"uid\",\"vmf\":{\"key\":\"value\"},"
 		"\"occurrences\":[{\"repeat\":1,\"index\":0}],"
@@ -687,8 +713,7 @@ TEST(Core, LookupKeysUseExactNativeNumericDomains)
 				  output("invalid", mapping(binding)))));
 	}
 	std::string definition =
-		schema("{\"index_number\":\"1.\",\"key\":\"value\","
-		       "\"number_of_bits\":64}");
+		schema(R"({"key":"value","number_of_bits":64})");
 	std::string binding =
 		"{\"cot\":\"send_time_ms\",\"vmf\":{\"key\":\"value\"},"
 		"\"factor\":2,\"offset\":1,\"values\":["
@@ -818,8 +843,7 @@ TEST(Core, CompiledLookupSupportsIndependentConcurrentCalls)
 TEST(Core, LargeLookupCompilesAndFindsBoundsAndMisses)
 {
 	std::string definition =
-		schema("{\"index_number\":\"1.\",\"key\":\"value\","
-		       "\"number_of_bits\":32}");
+		schema(R"({"key":"value","number_of_bits":32})");
 	std::string binding =
 		"{\"cot\":\"point.hae\",\"vmf\":{\"key\":\"value\"},"
 		"\"values\":[";
@@ -972,8 +996,7 @@ TEST(Core, ResidualXmlAndExtensionsArePresenceOnly)
 	yyjson_doc_free(document);
 	cv_buffer_destroy(&buffer);
 	std::string definition =
-		schema("{\"index_number\":\"1.\",\"key\":\"value\","
-		       "\"number_of_bits\":224,\"encode_type\":\"literal\"}");
+		schema(R"({"key":"value","number_of_bits":224,"type":"literal"})");
 	owner loaded;
 
 	EXPECT_EQ(CV_INVALID_CONFIG,
@@ -1012,8 +1035,7 @@ TEST(Core, ArgumentFailuresClearOutputsAndDoNotRevealPayload)
 TEST(Core, UnsignedConstantsRetainAll64Bits)
 {
 	std::string definition =
-		schema("{\"index_number\":\"1.\",\"key\":\"value\","
-		       "\"number_of_bits\":64}");
+		schema(R"({"key":"value","number_of_bits":64})");
 	for (uint64_t value : {UINT64_C(9007199254740993), UINT64_MAX}) {
 		std::string extra = ",\"vmf_constants\":[{\"vmf\":{"
 				    "\"key\":\"value\"},\"value\":" +
@@ -1085,8 +1107,7 @@ TEST(Core, RoundsHalvesAwayFromZeroAndRejectsOverflow)
 TEST(Core, BinaryFieldsRequireCompleteBoundedHexAndZeroHighBits)
 {
 	std::string definition =
-		schema("{\"index_number\":\"1.\",\"key\":\"value\","
-		       "\"number_of_bits\":9,\"encode_type\":\"bits\"}");
+		schema(R"({"key":"value","number_of_bits":9,"type":"bits"})");
 	std::string binding = "{\"cot\":\"uid\",\"vmf\":{\"key\":\"value\"},"
 			      "\"encoding\":\"hex\",\"bit_count\":9}";
 	owner loaded;
@@ -1114,12 +1135,9 @@ TEST(Core, BinaryFieldsRequireCompleteBoundedHexAndZeroHighBits)
 TEST(Core, TextLengthsCountWireUnitsAndRemainExplicit)
 {
 	std::string definition =
-		schema("{\"index_number\":\"1.\",\"key\":\"length\",\"number_"
-		       "of_bits\":8},"
-		       "{\"index_number\":\"2.\",\"key\":\"value\",\"number_of_"
-		       "bits\":32,"
-		       "\"encode_type\":\"text\",\"text_encoding\":\"latin_1\","
-		       "\"length_from\":\"1.\"}");
+		schema(R"({"key":"length","number_of_bits":8},{"key":"value",)"
+			R"("number_of_bits":32,"type":"text","text_encoding":"latin_1",)"
+			R"("length_from":"length"})");
 	std::string binding = "{\"cot\":\"uid\",\"vmf\":{\"key\":\"value\"}}";
 	for (unsigned length : {2, 3}) {
 		std::string extra = ",\"vmf_constants\":[{\"vmf\":{"
@@ -1153,12 +1171,10 @@ TEST(Core, TextLengthsCountWireUnitsAndRemainExplicit)
 TEST(Core, InactiveConstantsAndBindingsStillReceiveStaticValidation)
 {
 	std::string definition = schema(
-		"{\"index_number\":\"1.\",\"key\":\"mode\",\"number_of_bits\":"
-		"8},"
-		"{\"index_number\":\"2.\",\"key\":\"value\",\"number_of_bits\":"
-		"8,"
-		"\"constant\":7,\"when\":{\"mode\":\"all\",\"terms\":[{"
-		"\"field\":\"1.\",\"values\":[{\"first\":1,\"last\":1}]}]}}");
+		R"({"key":"mode","number_of_bits":8},{"key":"value",)"
+			R"("number_of_bits":8,"constant":7,)"
+			R"("when":{"all":[{"field":"mode","values":[{"first":1,)"
+			R"("last":1}]}]}})");
 	for (unsigned constant : {7, 8}) {
 		std::string extra = ",\"vmf_constants\":[{\"vmf\":{"
 				    "\"key\":\"mode\"},\"value\":0},{\"vmf\":{"
@@ -1186,10 +1202,9 @@ TEST(Core, InactiveConstantsAndBindingsStillReceiveStaticValidation)
 
 TEST(Core, RejectsOutOfRangeRepeatAndUnsupportedControlsAtLoad)
 {
-	std::string definition =
-		schema("{\"index_number\":\"1.\",\"key\":\"value\","
-		       "\"number_of_bits\":8,\"repeat_code\":\"R1\"}",
-		       ",\"repeats\":[{\"repeat_code\":\"R1\",\"count\":2}]");
+	std::string definition = schema(
+		R"({"repeat":{"count":2,"body":{"key":"value",)"
+		R"("number_of_bits":8}}})");
 	std::string binding = "{\"cot\":\"point.latitude\","
 			      "\"vmf\":{\"key\":\"value\"},"
 			      "\"occurrences\":[{\"repeat\":1,\"index\":2}]}";
@@ -1211,9 +1226,8 @@ TEST(Core, RejectsOutOfRangeRepeatAndUnsupportedControlsAtLoad)
 TEST(Core, GeneratedDatagramCannotExceedUdpLimit)
 {
 	std::string definition =
-		schema("{\"index_number\":\"1.\",\"key\":\"value\","
-		       "\"number_of_bits\":524064,\"encode_type\":\"text\","
-		       "\"text_encoding\":\"ascii_8\"}");
+		schema(R"({"key":"value","number_of_bits":524064,"type":"text",)"
+			R"("text_encoding":"ascii_8"})");
 	std::string extra = ",\"vmf_constants\":[{\"vmf\":{\"key\":\"value\"},"
 			    "\"value\":\"" +
 			    std::string(65508, 'A') + "\"}]";
@@ -1273,9 +1287,7 @@ TEST(Core, SignedRepresentationsAndMinimumConstantRemainExact)
 	for (const char *representation :
 	     {"twos_complement", "ones_complement", "sign_magnitude"}) {
 		std::string definition = schema(
-			"{\"index_number\":\"1.\",\"key\":\"value\","
-			"\"number_of_bits\":64,\"encode_type\":\"signed\","
-			"\"representation\":\"" +
+			R"({"key":"value","number_of_bits":64,"type":")" +
 			std::string(representation) + "\"}");
 		owner loaded;
 
@@ -1300,10 +1312,7 @@ TEST(Core, SignedRepresentationsAndMinimumConstantRemainExact)
 			  decode(definition, target.packets[0]).values);
 	}
 	std::string definition =
-		schema("{\"index_number\":\"1.\",\"key\":\"value\",\"number_of_"
-		       "bits\":64,"
-		       "\"encode_type\":\"signed\",\"representation\":\"twos_"
-		       "complement\"}");
+		schema(R"({"key":"value","number_of_bits":64,"type":"twos_complement"})");
 	owner loaded;
 
 	ASSERT_EQ(CV_OK,
@@ -1326,12 +1335,9 @@ TEST(Core, SignedRepresentationsAndMinimumConstantRemainExact)
 TEST(Core, SentinelCodesRequireExplicitLookupAndZeroScaleIsChecked)
 {
 	std::string definition =
-		schema("{\"index_number\":\"1.\",\"key\":\"value\",\"number_of_"
-		       "bits\":8,"
-		       "\"encode_type\":\"scaled\",\"scale\":{"
-		       "\"factor\":{\"numerator\":1,\"denominator\":1},"
-		       "\"bias\":{\"numerator\":0,\"denominator\":1},"
-		       "\"sentinels\":[38]}}");
+		schema(R"({"key":"value","number_of_bits":8,)"
+			R"("scale":{"factor":{"numerator":1,"denominator":1},)"
+			R"("bias":{"numerator":0,"denominator":1},"sentinels":[38]}})");
 	for (bool lookup : {false, true}) {
 		std::string binding = latitude;
 
@@ -1411,13 +1417,12 @@ TEST(Core, OnePortableDefinitionServesAllFourOutputProfiles)
 TEST(Core, MessageOrdinalsIsolateEditionsAndMaterializeSelectedDefaults)
 {
 	const std::string definition =
-		"{\"format\":\"vmf-schema/1\","
-		"\"message_standard\":\"TIDP-TE-R7\",\"messages\":["
-		"{\"message_number\":\"K01.1\","
-		"\"message_standard\":\"MIL-STD-6017B\",\"indexes\":[" +
-		std::string(field) + "]},{\"message_number\":\"K01.1\","
-		"\"message_standard\":\"MIL-STD-6017E\",\"indexes\":[" +
-		replace(field, "\"number_of_bits\":8", "\"number_of_bits\":16") +
+		R"({"format":"vmf-schema/1","message_standard":"TIDP-TE-R7",)"
+			R"("messages":[{"message_number":"K01.1",)"
+			R"("message_standard":"MIL-STD-6017B","elements":[)" +
+		std::string(field) + R"(]},{"message_number":"K01.1",)"
+			R"("message_standard":"MIL-STD-6017E","elements":[)" +
+		replace(field, R"("number_of_bits":8)", R"("number_of_bits":16)") +
 		"]}]}";
 	std::string first = mapping(latitude);
 	std::string d1 = replace(first, "\"envelope\":\"C\"",
@@ -1563,15 +1568,10 @@ TEST(Core, HeaderMetadataDefaultsOnlyOmittedContainers)
 
 TEST(Core, NestedGroupInferenceAndIndicatorRepeatCountsAreExplicit)
 {
-	std::string definition =
-		schema("{\"index_number\":\"1.\",\"indicator\":\"gpi\","
-		       "\"target\":\"G1\"},"
-		       "{\"index_number\":\"1.1.1\",\"indicator\":\"gri\","
-		       "\"group_code\":\"G1\",\"repeat_code\":\"R1(3)\"},"
-		       "{\"index_number\":\"1.1.2\",\"key\":\"value\",\"number_"
-		       "of_bits\":8,"
-		       "\"group_code\":\"G1\",\"repeat_code\":\"R1/R2\"}",
-		       ",\"repeats\":[{\"repeat_code\":\"R2\",\"count\":1}]");
+	std::string definition = schema(
+		R"({"optional":{"recurrence":{"maximum":3,"body":[)"
+		R"({"repeat":{"count":1,"body":{"key":"value",)"
+		R"("number_of_bits":8}}}]}}})");
 	std::string binding =
 		"{\"cot\":\"point.latitude\","
 		"\"vmf\":{\"key\":\"value\"},\"occurrences\":[{"

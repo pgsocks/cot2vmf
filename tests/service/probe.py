@@ -32,21 +32,21 @@ ENTRYPOINT_ENV = ENTRYPOINT_RUNTIME_ENV + (
 
 
 def fixture():
-    indexes = [
-        {"index_number": "1.", "key": "latitude", "number_of_bits": 32,
-         "encode_type": "scaled", "representation": "twos_complement",
+    elements = [
+        {"key": "latitude", "number_of_bits": 32,
+         "type": "twos_complement",
          "scale": {"factor": {"numerator": 1, "denominator": 100000},
                    "bias": {"numerator": 0, "denominator": 1}}},
-        {"index_number": "2.", "key": "longitude", "number_of_bits": 32,
-         "encode_type": "scaled", "representation": "twos_complement",
+        {"key": "longitude", "number_of_bits": 32,
+         "type": "twos_complement",
          "scale": {"factor": {"numerator": 1, "denominator": 100000},
                    "bias": {"numerator": 0, "denominator": 1}}},
-        {"index_number": "3.", "key": "identifier", "number_of_bits": 224,
-         "encode_type": "literal"},
+        {"key": "identifier", "number_of_bits": 224,
+         "type": "literal"},
     ]
     schema = {"format": "vmf-schema/1",
               "message_standard": "MIL-STD-6017B", "messages": [
-                  {"message_number": f"K01.{n}", "indexes": indexes}
+                  {"message_number": f"K01.{n}", "elements": elements}
                   for n in (1, 2)]}
     outputs = []
     for n in (1, 2):
@@ -118,7 +118,7 @@ def configuration(binary, root):
 
     schema = root.parent / "schema.json"
     definition = fixture()["schemas"][0]["document"]
-    definition["messages"][0]["indexes"][0]["number_of_bits"] = 33
+    definition["messages"][0]["elements"][0]["number_of_bits"] = 33
     schema.write_text(json.dumps(definition))
     mapping = root.parent / "mapping.json"
     mapping.write_text(json.dumps(fixture()["outputs"][0]["mapping"]))
@@ -802,9 +802,8 @@ def schema_restoration(binary, root):
         original = service.packets()
         snapshot = copy.deepcopy(initial["draft"]["schemas"])
         draft = copy.deepcopy(initial["draft"])
-        field = draft["schemas"][0]["document"]["messages"][0]["indexes"][0]
-        field["encode_type"] = "signed"
-        del field["representation"]
+        field = draft["schemas"][0]["document"]["messages"][0]["elements"][0]
+        field["number_of_bits"] = 0
         del field["scale"]
         invalid = service.request("POST", "/api/state", {
             "revision": initial["draft_revision"], "workspace": draft})
@@ -843,14 +842,13 @@ def schema_restoration(binary, root):
 def feedback_fixture():
     document = fixture()
     definition = document["schemas"][0]["document"]
-    definition["messages"] = [{"message_number": "K01.1", "indexes": [
-        {"index_number": "1.", "key": "sent", "number_of_bits": 64},
-        {"index_number": "2.", "key": "mode", "number_of_bits": 8},
-        {"index_number": "3.", "key": "conditional", "number_of_bits": 8,
-         "when": {"mode": "all", "terms": [
-             {"field": "2.", "values": [{"first": 1, "last": 1}]}]}},
-        {"index_number": "4.", "indicator": "fpi", "target": "4.1"},
-        {"index_number": "4.1", "key": "optional", "number_of_bits": 32},
+    definition["messages"] = [{"message_number": "K01.1", "elements": [
+        {"key": "sent", "number_of_bits": 64},
+        {"key": "mode", "number_of_bits": 8},
+        {"key": "conditional", "number_of_bits": 8,
+         "when": {"all": [
+             {"field": "mode", "values": [{"first": 1, "last": 1}]}]}},
+        {"optional": {"key": "optional", "number_of_bits": 32}},
     ]}]
     partial = document["outputs"][0]
     partial["id"] = "authoring"
@@ -981,9 +979,9 @@ def feedback(binary, root):
 
         large = fixture()
         large["schemas"][0]["document"]["messages"] = [{
-            "message_number": "K01.1", "indexes": [{
-                "index_number": "1.", "key": "large", "number_of_bits": 524064,
-                "encode_type": "text", "text_encoding": "ascii_8"}]}]
+            "message_number": "K01.1", "elements": [{
+                "key": "large", "number_of_bits": 524064,
+                "type": "text", "text_encoding": "ascii_8"}]}]
         large["outputs"] = large["outputs"][:1]
         large["outputs"][0]["mapping"]["fields"] = []
         large["outputs"][0]["mapping"]["vmf_constants"] = [
@@ -1178,9 +1176,9 @@ def authorities(binary, root):
 def large_lookup(binary, root):
     workspace = fixture()
     workspace["outputs"] = workspace["outputs"][:1]
-    workspace["schemas"][0]["document"]["messages"][0]["indexes"] = [
-        {"index_number": "1.", "key": "code", "number_of_bits": 8,
-         "encode_type": "unsigned"}]
+    workspace["schemas"][0]["document"]["messages"][0]["elements"] = [
+        {"key": "code", "number_of_bits": 8,
+         "type": "unsigned"}]
     workspace["outputs"][0]["mapping"]["fields"] = [{
         "cot": "uid", "vmf": {"key": "code"}, "values": [
             {"cot": "key" + str(i), "vmf": 7}
