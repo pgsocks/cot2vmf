@@ -1783,3 +1783,96 @@ test('pending schema edits explain how to save',
     await expect(pending).toBeHidden();
     expect((await state(request)).valid).toBe(true);
   });
+
+async function exportSelectedSchema(page) {
+  const event = page.waitForEvent('download');
+  await page.locator('#export-schema').click();
+  const download = await event;
+  const stream = await download.createReadStream(), chunks = [];
+  for await (const chunk of stream) chunks.push(chunk);
+  return JSON.parse(Buffer.concat(chunks).toString());
+}
+
+test('schema file read failures identify the file without changing the draft',
+  async ({page, request}) => {
+    await page.addInitScript(() => {
+      File.prototype.text = async () => {
+        throw new TypeError('NetworkError when attempting to fetch resource.');
+      };
+    });
+    await page.goto('/'); await saved(page);
+    await page.locator('[data-tab="schemas"]').click();
+    const before = await state(request);
+    await page.locator('#import-schema').setInputFiles({
+      name: 'unreadable.json', mimeType: 'application/json',
+      buffer: Buffer.from(JSON.stringify(schema)),
+    });
+    await expect(page.locator('#toast')).toContainText(
+      'Could not read the selected schema file. Choose the file again.');
+    await expect(page.locator('#schema-list [data-schema-id]')).toHaveCount(0);
+    await expect(page.locator('#save-status')).toHaveText('Changes saved');
+    const after = await state(request);
+    expect(after.draft).toEqual(before.draft);
+    expect(after.draft_revision).toBe(before.draft_revision);
+  });
+
+test('failed import save connections keep the schema available for export',
+  async ({page, request}) => {
+    await page.goto('/'); await saved(page);
+    await page.locator('[data-tab="schemas"]').click();
+    const before = await state(request);
+    await page.route('**/api/state', route => {
+      if (route.request().method() === 'POST') return route.abort('failed');
+      return route.continue();
+    });
+    await page.locator('#import-schema').setInputFiles({
+      name: 'unsaved.json', mimeType: 'application/json',
+      buffer: Buffer.from(JSON.stringify(schema)),
+    });
+    await expect(page.locator('#save-status')).toHaveText('Save not confirmed');
+    await expect(page.locator('#toast')).toContainText(
+      'Could not contact the translator service.');
+    await expect(page.locator('#toast')).toContainText(
+      'Keep this tab open. Use Export schema to keep a copy before reloading.');
+    await expect(page.locator('#schema-list [data-schema-id="unsaved"]'))
+      .toHaveClass(/selected/);
+    expect(await exportSelectedSchema(page)).toEqual(schema);
+    const after = await state(request);
+    expect(after.draft).toEqual(before.draft);
+    expect(after.draft_revision).toBe(before.draft_revision);
+  });
+
+test('interrupted import save responses preserve the schema without confirming the save',
+  async ({page, request}) => {
+    await page.addInitScript(() => {
+      const originalFetch = window.fetch;
+      window.fetch = async (input, options) => {
+        const response = await originalFetch(input, options);
+        if (String(input).endsWith('/api/state') && options?.method === 'POST') {
+          response.text = async () => {
+            throw new TypeError('NetworkError when attempting to fetch resource.');
+          };
+        }
+        return response;
+      };
+    });
+    await page.goto('/'); await saved(page);
+    await page.locator('[data-tab="schemas"]').click();
+    await page.locator('#import-schema').setInputFiles({
+      name: 'unconfirmed.json', mimeType: 'application/json',
+      buffer: Buffer.from(JSON.stringify(schema)),
+    });
+    await expect(page.locator('#save-status')).toHaveText('Save not confirmed');
+    await expect(page.locator('#toast')).toContainText(
+      'The connection to the translator ended before its response was received.');
+    await expect(page.locator('#toast')).toContainText(
+      'Keep this tab open. Use Export schema to keep a copy before reloading.');
+    await expect(page.locator('#schema-list [data-schema-id="unconfirmed"]'))
+      .toHaveClass(/selected/);
+    expect(await exportSelectedSchema(page)).toEqual(schema);
+    const snapshot = await state(request);
+    expect(snapshot.draft.schemas).toEqual([
+      {id: 'unconfirmed', document: schema},
+    ]);
+    expect(snapshot.valid).toBe(true);
+  });

@@ -485,9 +485,22 @@ function changed() {
   saveTimer = setTimeout(save, 180);
   renderFeedback();
 }
+function connectionFailure(message) {
+  const error = new Error(message);
+  error.connectionFailure = true;
+  return error;
+}
 async function request(path, options = {}) {
-  const response = await fetch(path, {cache: "no-store", credentials: "same-origin", ...options});
-  const body = parseJSON(await response.text());
+  let response;
+  try {
+    response = await fetch(path, {cache: "no-store", credentials: "same-origin", ...options});
+  } catch {
+    throw connectionFailure("Could not contact the translator service. Check that it is running and that this page is reachable.");
+  }
+  let text;
+  try { text = await response.text(); }
+  catch { throw connectionFailure("The connection to the translator ended before its response was received."); }
+  const body = parseJSON(text);
   if (!response.ok) {
     const error = new Error(body.error || body.message || "Request failed (" + response.status + ").");
     error.status = response.status;
@@ -528,8 +541,9 @@ async function save() {
       state = error.body;
       status();
       $("save-status").textContent = "Draft not active · retry with your next edit";
-    } else $("save-status").textContent = "Edits not saved";
-    message(error.status === 409 ? "The workspace changed in another window. Export your schema if needed, then reload before editing." : error.message, true);
+    } else $("save-status").textContent = error.connectionFailure ? "Save not confirmed" : "Edits not saved";
+    const detail = error.message + (error.connectionFailure ? " Keep this tab open. Use Export schema to keep a copy before reloading." : "");
+    message(error.status === 409 ? "The workspace changed in another window. Export your schema if needed, then reload before editing." : detail, true);
   } finally {
     saving = false;
     if (generation !== savedGeneration && generation !== version) save();
@@ -1502,7 +1516,10 @@ async function guidedImportSchema(event) {
   const file = event.target.files[0]; if (!file) return;
   try {
     if (file.size > 16 * 1024 * 1024) throw new Error("Schema exceeds 16 MiB.");
-    const document = parseJSON(await file.text());
+    let text;
+    try { text = await file.text(); }
+    catch { throw new Error("Could not read the selected schema file. Choose the file again."); }
+    const document = parseJSON(text);
     if (document.format !== "vmf-schema/1" || !Array.isArray(document.messages)) throw new Error("Choose a native vmf-schema/1 definition.");
     const existing = draftSchemas().find(schema => canonical(schema.document) === canonical(document));
     if (existing) {
