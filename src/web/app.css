@@ -390,6 +390,21 @@ p {
   align-items: center;
   margin-bottom: 12px;
   font-size: 11px;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.mapping-actions {
+  flex: 1;
+  min-width: 220px;
+  max-width: 600px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 7px;
+}
+.mapping-actions > .muted {
+  text-align: right;
+  line-height: 1.5;
 }
 .mapping-toolbar strong {
   display: block;

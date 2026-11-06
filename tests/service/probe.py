@@ -839,6 +839,93 @@ def schema_restoration(binary, root):
         service.close()
 
 
+def mapping_import(binary, root):
+    service = Service(binary, root, web=True)
+    try:
+        initial = service.request("POST", "/api/state", {
+            "revision": service.state()["draft_revision"],
+            "workspace": fixture()})
+        original = service.packets()
+        replacement = copy.deepcopy(initial["draft"])
+        mapping = copy.deepcopy(replacement["outputs"][0]["mapping"])
+        mapping["name"] = "Imported position"
+        mapping["fields"][0]["factor"] = 2
+        replacement["outputs"][0]["mapping"] = mapping
+        replacement["outputs"][0]["enabled"] = False
+        saved = service.request("POST", "/api/state", {
+            "revision": initial["draft_revision"], "workspace": replacement})
+        assert saved["valid"], saved
+        assert saved["draft"] == replacement
+        assert saved["active_revision"] == saved["draft_revision"]
+        assert service.packets(1) == [original[1]]
+        assert not select.select([service.output], [], [], .1)[0]
+    finally:
+        service.close()
+
+    service = Service(binary, root, web=True)
+    try:
+        restored = service.state()
+        assert restored["draft"] == replacement
+        assert restored["draft_revision"] == saved["draft_revision"]
+        assert service.packets(1) == [original[1]]
+        replacement["outputs"][0]["enabled"] = True
+        enabled = service.request("POST", "/api/state", {
+            "revision": restored["draft_revision"], "workspace": replacement})
+        assert enabled["valid"], enabled
+        changed = service.packets()
+        assert changed[0] != original[0] and changed[1] == original[1]
+
+        imported = fixture()
+        imported["schemas"][0]["id"] = "imported-schema"
+        document = imported["schemas"][0]["document"]
+        document["messages"] = document["messages"][:1]
+        document["messages"][0]["elements"].append({
+            "key": "large", "number_of_bits": 64})
+        imported["outputs"] = imported["outputs"][:1]
+        output = imported["outputs"][0]
+        output["id"] = "imported-output"
+        output["enabled"] = False
+        output["mapping"]["schema"] = "imported-schema"
+        output["mapping"]["envelope"] = "D1"
+        output["mapping"]["vmf_constants"] = [{
+            "vmf": {"key": "large"}, "value": 18446744073709551615}]
+        saved = service.request("POST", "/api/state", {
+            "revision": enabled["draft_revision"], "workspace": imported})
+        assert saved["valid"], saved
+        assert saved["draft"] == imported
+        assert saved["active_revision"] == saved["draft_revision"]
+        service.send()
+        assert not select.select([service.output], [], [], .2)[0]
+        assert exported(binary, root) == imported
+        assert exported(binary, root, active=True) == imported
+    finally:
+        service.close()
+
+    service = Service(binary, root, web=True)
+    try:
+        restored = service.state()
+        assert restored["draft"] == imported
+        assert restored["draft_revision"] == saved["draft_revision"]
+        service.send()
+        assert not select.select([service.output], [], [], .2)[0]
+        imported["outputs"][0]["enabled"] = True
+        enabled = service.request("POST", "/api/state", {
+            "revision": restored["draft_revision"], "workspace": imported})
+        assert enabled["valid"], enabled
+        translated = service.packets(1)
+        assert translated[0] != original[0]
+        assert not select.select([service.output], [], [], .1)[0]
+    finally:
+        service.close()
+
+    service = Service(binary, root, web=True)
+    try:
+        assert service.state()["draft"] == imported
+        assert service.packets(1) == translated
+    finally:
+        service.close()
+
+
 def feedback_fixture():
     document = fixture()
     definition = document["schemas"][0]["document"]
@@ -1317,5 +1404,6 @@ if __name__ == "__main__":
          "persistence-size": persistence_size,
          "revisions": revisions, "authorities": authorities,
          "large-lookup": large_lookup, "feedback": feedback,
-         "schema-restoration": schema_restoration}[
+         "schema-restoration": schema_restoration,
+         "mapping-import": mapping_import}[
              sys.argv[2]](os.path.abspath(sys.argv[1]), root)

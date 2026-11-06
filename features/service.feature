@@ -63,3 +63,8 @@ Feature: Continuous CoT translation through UDP
   Scenario: Restore payload schemas while preserving intervening mapping edits
     When the "schema-restoration" service workflow is exercised
     Then all service assertions succeed
+
+  @web
+  Scenario: Review imported mappings and workspace replacements before enabling
+    When the "mapping-import" service workflow is exercised
+    Then all service assertions succeed

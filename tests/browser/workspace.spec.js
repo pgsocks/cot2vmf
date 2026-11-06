@@ -1876,3 +1876,341 @@ test('interrupted import save responses preserve the schema without confirming t
     ]);
     expect(snapshot.valid).toBe(true);
   });
+
+function mappingFile(document, name = 'mapping.json') {
+  return {name, mimeType: 'application/json', buffer: Buffer.from(
+    typeof document === 'string' ? document : JSON.stringify(document))};
+}
+
+async function importMapping(page, request, document) {
+  const before = (await state(request)).draft_revision;
+  await page.locator('#import-mapping').setInputFiles(mappingFile(document));
+  await expect.poll(async () => (await state(request)).draft_revision)
+    .toBeGreaterThan(before);
+  await saved(page);
+  await expect(page.locator('#import-mapping')).toHaveValue('');
+  return (await state(request)).draft;
+}
+
+test('mapping imports replace the selected output and preserve other definitions',
+  async ({page, request}) => {
+    const retained = output('retained', {name: 'Keep this output'}, true);
+    await draft(request, [output('replace', {}, true), retained]);
+    await page.goto('/'); await saved(page);
+    await page.locator('#output-list [data-output-id="replace"]').click();
+    const mapping = output('ignored', {name: 'Imported replacement', fields: [
+      {cot: 'send_time_ms', vmf: {key: 'sent'}},
+      {cot: 'detail.status.battery', vmf: {key: 'battery'}, factor: 2},
+    ]}).mapping;
+    const imported = await importMapping(page, request, mapping);
+    expect(imported.schemas).toEqual([{id: 'repair', document: schema}]);
+    expect(imported.outputs).toEqual([
+      {id: 'replace', enabled: false, mapping}, retained,
+    ]);
+    await expect(page.locator('#output-list [data-output-id="replace"]'))
+      .toHaveClass(/selected/);
+    await expect(page.getByRole('checkbox', {name: 'Enable output replace'}))
+      .not.toBeChecked();
+    await expect(page.locator('path.wire')).toHaveCount(2);
+    await page.reload(); await saved(page);
+    await expect(page.locator('path.wire')).toHaveCount(2);
+    expect((await state(request)).draft).toEqual(imported);
+    await page.getByRole('checkbox', {name: 'Enable output replace'}).check();
+    await saved(page);
+    expect((await state(request)).valid).toBe(true);
+    expect((await state(request)).draft.outputs[0].enabled).toBe(true);
+  });
+
+test('keyboard mapping import creates an output and permits selecting the same file again',
+  async ({page, request}) => {
+    await draft(request, [output('existing')]);
+    await page.goto('/'); await saved(page);
+    const mapping = output('ignored', {name: 'New import', fields: [
+      {cot: 'send_time_ms', vmf: {key: 'sent'}},
+    ]}).mapping;
+    const before = (await state(request)).draft_revision;
+    const chooser = page.waitForEvent('filechooser');
+    await page.locator('#import-mapping-button').focus();
+    await page.keyboard.press('Enter');
+    await (await chooser).setFiles(mappingFile(mapping));
+    await expect.poll(async () => (await state(request)).draft_revision)
+      .toBeGreaterThan(before);
+    await saved(page);
+    let imported = (await state(request)).draft;
+    expect(imported.outputs).toHaveLength(2);
+    const created = imported.outputs[1];
+    expect(created.id).not.toBe('existing');
+    expect(created).toEqual({id: created.id, enabled: false, mapping});
+    await expect(page.locator('#output-list [data-output-id="' + created.id + '"]'))
+      .toHaveClass(/selected/);
+    imported = await importMapping(page, request, mapping);
+    expect(imported.outputs).toHaveLength(2);
+    expect(imported.outputs[1]).toEqual(created);
+  });
+
+test('workspace imports immediately replace all data and clear authoring history',
+  async ({page, request}) => {
+    await draft(request, [output('old', {}, true)]);
+    await page.goto('/'); await saved(page);
+    await page.locator('[data-tab="schemas"]').click();
+    await page.locator('#add-schema').click(); await saved(page);
+    await expect(page.locator('#schema-undo')).toBeEnabled();
+    await page.locator('[data-tab="mapping"]').click();
+    await page.locator('.source-port[data-source-path="send_time_ms"]').click();
+    await expect(page.locator('path.drag-wire')).toHaveCount(1);
+    const replacement = structuredClone(schema);
+    replacement.messages[0].elements = [{key: 'replacement', number_of_bits: 8}];
+    const document = {...empty, schemas: [{id: 'repair', document: replacement}],
+      outputs: [output('first', {fields: [
+        {cot: 'detail.status.battery', vmf: {key: 'replacement'}},
+      ]}, true), output('second', {name: 'Also imported'}, false)],
+    };
+    let dialogs = 0;
+    page.on('dialog', async dialog => { dialogs++; await dialog.dismiss(); });
+    const imported = await importMapping(page, request, document);
+    expect(dialogs).toBe(0);
+    expect(imported).toEqual({...document, outputs: document.outputs.map(item =>
+      ({...item, enabled: false}))});
+    await expect(page.locator('path.drag-wire')).toHaveCount(0);
+    await expect(page.locator('.target-port[data-target-key="sent"]')).toHaveCount(0);
+    await expect(page.locator('.target-port[data-target-key="replacement"]'))
+      .toHaveCount(1);
+    await expect(page.locator('path.wire')).toHaveCount(1);
+    await expect(page.locator('#output-list [data-output-id="first"]'))
+      .toHaveClass(/selected/);
+    await payloadDefinition(page, 'repair');
+    await expect(page.locator('#schema-undo')).toBeDisabled();
+    await page.reload(); await saved(page);
+    expect((await state(request)).draft).toEqual(imported);
+  });
+
+test('mapping imports preserve exact signed and unsigned integer values after reload',
+  async ({page, request}) => {
+    await draft(request, []);
+    await page.goto('/'); await saved(page);
+    const mapping = '{"format":"cot-vmf-mapping-config/1",' +
+      '"schema":"repair","message":0,"envelope":"C","fields":[' +
+      '{"cot":"type","vmf":{"key":"battery"},"values":[' +
+      '{"cot":"a-f-G","vmf":18446744073709551615}]}],' +
+      '"vmf_constants":[{"vmf":{"key":"sent"},' +
+      '"value":-9223372036854775808}]}';
+    await importMapping(page, request, mapping);
+    await page.reload(); await saved(page);
+    const text = await (await request.get('/api/state')).text();
+    expect(text).toContain('18446744073709551615');
+    expect(text).toContain('-9223372036854775808');
+    expect(text).not.toContain('18446744073709552000');
+    expect(text).not.toContain('-9223372036854776000');
+  });
+
+test('invalid mapping and workspace files leave the current draft unchanged',
+  async ({page, request}) => {
+    await draft(request, [output('retained', {}, true)]);
+    await page.goto('/'); await saved(page);
+    await page.locator('#output-list [data-output-id="retained"]').click();
+    const before = await state(request);
+    let posts = 0;
+    page.on('request', event => {
+      if (event.method() === 'POST' && event.url().endsWith('/api/state')) posts++;
+    });
+    const invalid = [
+      '{', 'null', '[]', '{"format":"vmf-schema/1","messages":[]}',
+      '{"format":"cot-vmf-mapping-config/1","format":"cot-vmf-mapping-config/1"}',
+      {...empty, schemas: null}, {...empty, outputs: [null]},
+      {...empty, service: {}},
+      {...empty, schemas: [{id: 'broken', document: null}]},
+      {...empty, outputs: [{...output('broken'), enabled: 'true'}]},
+      {...empty, outputs: [{...output('broken'), mapping: []}]},
+      {...empty, outputs: [output('same'), output('same')]},
+      {...empty, outputs: [output('')]},
+      {...empty, outputs: [output('nul\u0000id')]},
+      {...empty, outputs: [output('é'.repeat(65))]},
+      {...empty, outputs: [output('extra', {}, false),
+        {...output('bad'), unknown: true}]},
+      {...empty, schemas: Array.from({length: 129}, (_, id) =>
+        ({id: String(id), document: schema}))},
+    ];
+    for (const document of invalid) {
+      await page.locator('#import-mapping').setInputFiles(mappingFile(document));
+      await expect(page.locator('#import-mapping')).toHaveValue('');
+      await expect(page.locator('#toast')).toBeVisible();
+      await expect(page.locator('#toast')).toHaveClass(/error/);
+      await expect(page.locator('#output-list [data-output-id="retained"]'))
+        .toHaveClass(/selected/);
+    }
+    expect(posts).toBe(0);
+    const after = await state(request);
+    expect(after.draft).toEqual(before.draft);
+    expect(after.draft_revision).toBe(before.draft_revision);
+    await expect(page.locator('#save-status')).toHaveText('Changes saved');
+  });
+
+test('mapping import respects the output bound while allowing selected replacement',
+  async ({page, request}) => {
+    const outputs = Array.from({length: 128}, (_, index) => output('out-' + index));
+    await draft(request, outputs);
+    await page.goto('/'); await saved(page);
+    const before = await state(request);
+    const mapping = output('ignored', {name: 'At the limit'}).mapping;
+    await page.locator('#import-mapping').setInputFiles(mappingFile(mapping));
+    await expect(page.locator('#toast')).toContainText('at most 128 outputs');
+    await expect(page.locator('#import-mapping')).toHaveValue('');
+    expect((await state(request)).draft_revision).toBe(before.draft_revision);
+    await page.locator('#output-list [data-output-id="out-127"]').click();
+    const imported = await importMapping(page, request, mapping);
+    expect(imported.outputs).toHaveLength(128);
+    expect(imported.outputs.slice(0, 127)).toEqual(outputs.slice(0, 127));
+    expect(imported.outputs[127]).toEqual({id: 'out-127', enabled: false, mapping});
+  });
+
+test('mapping import rejects oversized files and requests before modifying the draft',
+  async ({page, request}) => {
+    await draft(request, [output('retained')]);
+    await page.goto('/'); await saved(page);
+    const before = await state(request);
+    const limit = 16 * 1024 * 1024;
+    await page.locator('#import-mapping').setInputFiles(mappingFile(' '.repeat(limit + 1)));
+    await expect(page.locator('#toast')).toContainText('Mapping file exceeds 16 MiB');
+    await expect(page.locator('#import-mapping')).toHaveValue('');
+    const prefix = '{"format":"cot-vmf-mapping-config/1","name":"', suffix = '"}';
+    const document = prefix + 'x'.repeat(limit - prefix.length - suffix.length) + suffix;
+    await page.locator('#import-mapping').setInputFiles(mappingFile(document));
+    await expect(page.locator('#toast')).toContainText('16 MiB request limit');
+    await expect(page.locator('#import-mapping')).toHaveValue('');
+    const after = await state(request);
+    expect(after.draft).toEqual(before.draft);
+    expect(after.draft_revision).toBe(before.draft_revision);
+    await expect(page.locator('#output-list [data-output-id]')).toHaveCount(1);
+  });
+
+test('unresolved imported mappings can be repaired and use native validation when enabled',
+  async ({page, request}) => {
+    await draft(request, []);
+    await page.goto('/'); await saved(page);
+    const mapping = output('ignored', {schema: 'missing', fields: [
+      {cot: 'detail.status.battery', vmf: {key: 'not-a-field'}},
+    ]}).mapping;
+    const imported = await importMapping(page, request, mapping);
+    const id = imported.outputs[0].id;
+    await expect(page.locator('#output-list')).toContainText('Unresolved reference');
+    await expect(page.getByRole('checkbox', {name: 'Enable output ' + id}))
+      .toBeDisabled();
+    expect((await state(request)).valid).toBe(true);
+    const schemaId = page.locator('#mapping-editor [data-property="schema"]');
+    await schemaId.fill('repair'); await schemaId.press('Tab'); await saved(page);
+    const active = (await state(request)).active_revision;
+    await page.getByRole('checkbox', {name: 'Enable output ' + id}).check();
+    await expect.poll(async () => (await state(request)).valid).toBe(false);
+    const rejected = await state(request);
+    expect(rejected.active_revision).toBe(active);
+    expect(rejected.draft.outputs[0].mapping.fields).toEqual(mapping.fields);
+    await expect(page.locator('#draft-error')).toBeVisible();
+  });
+
+test('mapping file read failures and save failures keep their distinct recovery states',
+  async ({page, request}) => {
+    await page.addInitScript(() => {
+      const read = File.prototype.text;
+      File.prototype.text = function () {
+        if (this.name === 'unreadable.json') return Promise.reject(new TypeError('Read failed'));
+        return read.call(this);
+      };
+    });
+    await draft(request, [output('retained')]);
+    await page.goto('/'); await saved(page);
+    await page.locator('#output-list [data-output-id="retained"]').click();
+    const before = await state(request);
+    const mapping = output('ignored', {name: 'Retained local import'}).mapping;
+    await page.locator('#import-mapping').setInputFiles(mappingFile(mapping, 'unreadable.json'));
+    await expect(page.locator('#toast')).toContainText(
+      'Could not read the selected mapping file. Choose the file again.');
+    await expect(page.locator('#import-mapping')).toHaveValue('');
+    expect((await state(request)).draft_revision).toBe(before.draft_revision);
+    await page.route('**/api/state', route => {
+      if (route.request().method() === 'POST') return route.abort('failed');
+      return route.continue();
+    });
+    await page.locator('#import-mapping').setInputFiles(mappingFile(mapping));
+    await expect(page.locator('#save-status')).toHaveText('Save not confirmed');
+    await expect(page.locator('#toast')).toContainText('Could not contact the translator service');
+    await expect(page.locator('#mapping-editor [data-property="name"]'))
+      .toHaveValue('Retained local import');
+    await expect(page.locator('#import-mapping')).toHaveValue('');
+    expect((await state(request)).draft).toEqual(before.draft);
+  });
+
+test('schema Undo preserves imported replacements without re-enabling their output',
+  async ({page, request}) => {
+    await payloadDraft(request, schema, [output('replace', {schema: 'payload',
+      fields: [{cot: 'detail.status.battery', vmf: {key: 'battery'}}]}, true)]);
+    await page.goto('/'); await payloadDefinition(page);
+    await page.locator('.tree-select.field[data-field-key="battery"]').click();
+    await page.getByRole('button', {name: 'Repeat fixed times', exact: true}).click();
+    await saved(page);
+    expect((await state(request)).draft.outputs[0].enabled).toBe(false);
+    await page.locator('[data-tab="mapping"]').click();
+    await page.locator('#output-list [data-output-id="replace"]').click();
+    const mapping = output('ignored', {schema: 'payload', name: 'Keep replacement',
+      fields: [{cot: 'send_time_ms', vmf: {key: 'sent'}, factor: 3}],
+    }).mapping;
+    await importMapping(page, request, mapping);
+    await page.locator('[data-tab="schemas"]').click();
+    await page.locator('#schema-undo').click(); await saved(page);
+    const restored = (await state(request)).draft;
+    expect(restored.schemas[0].document).toEqual(schema);
+    expect(restored.outputs).toEqual([{id: 'replace', enabled: false, mapping}]);
+  });
+
+test('invalid imported workspace schemas remain saved drafts with the previous configuration active',
+  async ({page, request}) => {
+    await draft(request, [output('previous', {}, true)]);
+    await page.goto('/'); await saved(page);
+    const active = (await state(request)).active_revision;
+    const invalid = structuredClone(schema);
+    invalid.messages[0].elements = [{key: 'broken', number_of_bits: 0}];
+    const document = {...empty, schemas: [{id: 'broken', document: invalid}],
+      outputs: [output('imported', {schema: 'broken'}, true)],
+    };
+    const imported = await importMapping(page, request, document);
+    expect(imported).toEqual({...document, outputs: [
+      {...document.outputs[0], enabled: false},
+    ]});
+    let snapshot = await state(request);
+    expect(snapshot.valid).toBe(false);
+    expect(snapshot.active_revision).toBe(active);
+    await expect(page.locator('#draft-error')).toContainText(
+      'The last valid configuration remains active');
+    await payloadDefinition(page, 'broken');
+    await expect(page.locator('#schema-editor .schema-invalid').first())
+      .toBeVisible();
+    await page.reload(); await saved(page);
+    snapshot = await state(request);
+    expect(snapshot.draft).toEqual(imported);
+    expect(snapshot.valid).toBe(false);
+    expect(snapshot.active_revision).toBe(active);
+    await expect(page.locator('#draft-error')).toBeVisible();
+  });
+
+test('mapping import becomes available after reloading an initially unreachable workspace',
+  async ({page, request}) => {
+    await draft(request, []);
+    await page.route('**/api/state', route => route.abort('failed'), {times: 1});
+    await page.goto('/');
+    await expect(page.locator('#toast')).toContainText(
+      'Could not contact the translator service');
+    await expect(page.locator('#import-mapping-button')).toBeDisabled();
+    await page.locator('#reload').click(); await saved(page);
+    await expect(page.locator('#import-mapping-button')).toBeEnabled();
+    const before = (await state(request)).draft_revision;
+    const chooser = page.waitForEvent('filechooser');
+    await page.locator('#import-mapping-button').focus();
+    await page.keyboard.press('Enter');
+    const mapping = output('ignored', {name: 'Recovered import'}).mapping;
+    await (await chooser).setFiles(mappingFile(mapping));
+    await expect.poll(async () => (await state(request)).draft_revision)
+      .toBeGreaterThan(before);
+    await saved(page);
+    const imported = (await state(request)).draft.outputs;
+    expect(imported).toHaveLength(1);
+    expect(imported[0]).toEqual({id: imported[0].id, enabled: false, mapping});
+  });

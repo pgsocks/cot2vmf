@@ -464,6 +464,7 @@ let state = {draft: {format: "cot-vmf-workspace/1", schemas: [], outputs: []}, c
 let workspace = state.draft, generation = 0, savedGeneration = 0, saving = false, saveTimer;
 let selectedSchema = null, selectedMessage = null, selectedIndex = null, selectedWire = null, selectedOutput = null;
 let pendingMessage = null;
+let importingMapping = false;
 const envelopeProfiles = ["B", "C", "D", "D1"];
 let armedSource = null, dragging = null, pointerPosition = null, activeFields = new Set(), liveTimer, wireFrame;
 let pointerGesture = null, suppressPointerClick = false;
@@ -510,6 +511,7 @@ async function request(path, options = {}) {
   return body;
 }
 function status() {
+  $("import-mapping-button").disabled = importingMapping;
   $("save-status").textContent = state.valid === false ? "Draft saved · testing previous active mapping" : "Changes saved";
   $("revision-label").textContent = "Draft " + (state.draft_revision ?? "—") + " · Active " + (state.active_revision ?? "—");
   const error = state.error;
@@ -1534,6 +1536,78 @@ async function guidedImportSchema(event) {
   } catch (error) { message(error.message, true); }
   event.target.value = "";
 }
+function checkWorkspaceImport(document) {
+  const fail = detail => { throw new Error("Invalid imported workspace: " + detail); };
+  const properties = (value, keys, path) => {
+    if (!isObject(value)) fail(path + " must be an object.");
+    if (Object.keys(value).some(key => !keys.includes(key))) fail(path + " contains an unknown property.");
+  };
+  properties(document, ["format", "schemas", "outputs"], "workspace");
+  for (const collection of ["schemas", "outputs"]) {
+    const entries = document[collection], ids = new Set();
+    if (!Array.isArray(entries) || entries.length > 128) fail(collection + " must be an array with at most 128 entries.");
+    entries.forEach((entry, index) => {
+      const path = collection + "/" + index;
+      properties(entry, collection === "schemas" ? ["id", "document"] : ["id", "enabled", "mapping"], path);
+      if (typeof entry.id !== "string" || !entry.id || entry.id.includes("\0") || new TextEncoder().encode(entry.id).length > 128) fail(path + "/id must be nonempty text of at most 128 UTF-8 bytes without NUL.");
+      if (ids.has(entry.id)) fail(path + "/id duplicates " + entry.id + ".");
+      ids.add(entry.id);
+      if (collection === "schemas" && !isObject(entry.document)) fail(path + "/document must be a native schema object.");
+      if (collection === "outputs" && (typeof entry.enabled !== "boolean" || !isObject(entry.mapping))) fail(path + " requires a boolean enabled and an object mapping.");
+    });
+  }
+}
+async function guidedImportMapping(event) {
+  const file = event.target.files[0], targetId = selectedOutput;
+  if (!file || importingMapping) { event.target.value = ""; return; }
+  importingMapping = true;
+  $("import-mapping-button").disabled = true;
+  try {
+    if (file.size > 16 * 1024 * 1024) throw new Error("Mapping file exceeds 16 MiB.");
+    let text;
+    try { text = await file.text(); }
+    catch { throw new Error("Could not read the selected mapping file. Choose the file again."); }
+    const document = parseJSON(text);
+    if (!isObject(document) || !["cot-vmf-mapping-config/1", "cot-vmf-workspace/1"].includes(document.format)) throw new Error("Choose a cot-vmf-mapping-config/1 mapping or cot-vmf-workspace/1 workspace.");
+    const wholeWorkspace = document.format === "cot-vmf-workspace/1";
+    let candidate, output;
+    if (wholeWorkspace) {
+      checkWorkspaceImport(document);
+      candidate = {...document, outputs: document.outputs.map(item => ({...item, enabled: false}))};
+    } else {
+      const existing = draftOutputs().find(item => item.id === targetId);
+      if (targetId && !existing) throw new Error("The selected output was removed. Select an output and import again.");
+      if (!existing && workspace.outputs.length >= 128) throw new Error("A workspace can contain at most 128 outputs.");
+      let id = existing?.id;
+      if (!id) do { id = uid("output"); } while (draftOutputs().some(item => item.id === id));
+      output = {id, enabled: false, mapping: document};
+      candidate = {...workspace, outputs: existing ? workspace.outputs.map(item => item === existing ? output : item) : [...workspace.outputs, output]};
+    }
+    // Reserve the largest revision so a concurrent save cannot exceed the
+    // HTTP body limit by increasing the number of revision digits.
+    if (new TextEncoder().encode(json({revision: 18446744073709551615n, workspace: candidate})).length > 16 * 1024 * 1024) throw new Error("Imported workspace exceeds the 16 MiB request limit.");
+    workspace = candidate;
+    cancelPendingConnection();
+    selectedWire = pendingMessage = null;
+    if (wholeWorkspace) {
+      selectedSchema = selectedMessage = selectedIndex = null;
+      selectedOutput = workspace.outputs[0]?.id ?? null;
+      resetSchemaHistory();
+      expandedProperties.clear();
+      state.catalog = {...state.catalog, schemas: []};
+    } else {
+      selectedOutput = output.id;
+      for (const entry of schemaUndoHistory) entry.outputChanges = entry.outputChanges.filter(change => change.id !== output.id);
+    }
+    changed(); render();
+    message(wholeWorkspace ? "Workspace replaced. Imported outputs have Send off; review them before enabling." : "Mapping imported into " + output.id + " with Send off. Review it before enabling.");
+  } catch (error) { message(error.message, true); }
+  finally {
+    importingMapping = false;
+    $("import-mapping-button").disabled = false;
+    event.target.value = "";
+  }
+}
 function guidedDeleteSchema() {
   if (!selectedSchema) return;
   schemaChange("delete schema and its outputs", () => {
@@ -2081,6 +2155,8 @@ $("add-message").addEventListener("click", guidedAddMessage);
 $("add-index").addEventListener("click", guidedAddIndex);
 $("add-group").addEventListener("click", () => guidedAddElement("group"));
 $("import-schema").addEventListener("change", guidedImportSchema);
+$("import-mapping-button").addEventListener("click", () => $("import-mapping").click());
+$("import-mapping").addEventListener("change", guidedImportMapping);
 $("export-schema").addEventListener("click", () => { const schema = schemaById(selectedSchema); if (schema) download(schema.id + ".json", schema.document); });
 $("delete-schema").addEventListener("click", guidedDeleteSchema);
 $("reload").addEventListener("click", async () => {
