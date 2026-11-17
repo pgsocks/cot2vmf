@@ -248,6 +248,58 @@ static bool log_valid(const char *value)
 	       (!std::strcmp(value, "human") || !std::strcmp(value, "json"));
 }
 
+struct multicast_settings {
+	in_addr interface_address;
+	unsigned char ttl;
+	unsigned char loop;
+};
+
+static bool multicast_parse(const service_options *options,
+			    multicast_settings *settings)
+{
+	*settings = {{}, 1, 1};
+	const char *address = options->vmf_multicast_interface;
+
+	if (address &&
+	    (inet_pton(AF_INET, address, &settings->interface_address) != 1 ||
+	     IN_MULTICAST(ntohl(settings->interface_address.s_addr)) ||
+	     settings->interface_address.s_addr == INADDR_BROADCAST)) {
+		std::fputs("Invalid --vmf-multicast-interface: expected a "
+			   "local IPv4 address\n", stderr);
+		return false;
+	}
+	const char *ttl = options->vmf_multicast_ttl;
+
+	if (ttl) {
+		unsigned value = 0;
+		bool valid = *ttl != 0;
+
+		for (const char *p = ttl; valid && *p; ++p) {
+			valid = *p >= '0' && *p <= '9' && value <= 25;
+			if (valid)
+				value = value * 10 +
+					static_cast<unsigned>(*p - '0');
+		}
+		if (!valid || value > 255) {
+			std::fputs("Invalid --vmf-multicast-ttl: expected "
+				   "0..255\n", stderr);
+			return false;
+		}
+		settings->ttl = static_cast<unsigned char>(value);
+	}
+	const char *loop = options->vmf_multicast_loop;
+
+	if (loop) {
+		if (std::strcmp(loop, "0") && std::strcmp(loop, "1")) {
+			std::fputs("Invalid --vmf-multicast-loop: expected "
+				   "0 or 1\n", stderr);
+			return false;
+		}
+		settings->loop = static_cast<unsigned char>(*loop - '0');
+	}
+	return true;
+}
+
 /* edit serializes writers only. Validation and filesystem publication occur
  * without holding engine, so HTTP clients cannot stall UDP with file I/O.
  */
@@ -561,7 +613,29 @@ static void request(void *user, const char *method, const char *path,
 	pthread_mutex_unlock(&state->edit);
 }
 
-static int udp_socket(const char *endpoint, bool listener)
+static bool multicast_configure(int fd, const multicast_settings *settings)
+{
+	const char *option = nullptr;
+
+	if (setsockopt(fd, IPPROTO_IP, IP_MULTICAST_IF,
+		       &settings->interface_address,
+		       sizeof(settings->interface_address)))
+		option = "interface";
+	else if (setsockopt(fd, IPPROTO_IP, IP_MULTICAST_TTL, &settings->ttl,
+			   sizeof(settings->ttl)))
+		option = "TTL";
+	else if (setsockopt(fd, IPPROTO_IP, IP_MULTICAST_LOOP, &settings->loop,
+			   sizeof(settings->loop)))
+		option = "loopback";
+	if (!option)
+		return true;
+	std::fprintf(stderr, "Cannot configure VMF multicast %s: %s\n", option,
+		     std::strerror(errno));
+	return false;
+}
+
+static int udp_socket(const char *endpoint, bool listener,
+		      const multicast_settings *multicast)
 {
 	char host[256];
 	const char *port;
@@ -584,6 +658,18 @@ static int udp_socket(const char *endpoint, bool listener)
 
 		if (fd < 0)
 			continue;
+		const auto *address = reinterpret_cast<const sockaddr_in *>(
+			item->ai_addr);
+
+		/* Set multicast options before connect selects the route and
+		 * source address.
+		 */
+		if (!listener &&
+		    IN_MULTICAST(ntohl(address->sin_addr.s_addr)) &&
+		    !multicast_configure(fd, multicast)) {
+			close(fd);
+			continue;
+		}
 		int status =
 			listener ? bind(fd, item->ai_addr, item->ai_addrlen)
 				 : connect(fd, item->ai_addr, item->ai_addrlen);
@@ -708,6 +794,7 @@ static bool reload_active(service_state *state)
 int service_run(const service_options *options)
 {
 	service_state state = {};
+	multicast_settings multicast = {};
 
 	pthread_mutex_init(&state.edit, nullptr);
 	pthread_mutex_init(&state.engine, nullptr);
@@ -730,6 +817,8 @@ int service_run(const service_options *options)
 		std::fputs("Invalid endpoint or log format\n", stderr);
 		goto cleanup;
 	}
+	if (!multicast_parse(options, &multicast))
+		goto cleanup;
 	if (!initialize(&state, options, &initial, &initial_size)) {
 		const char *error =
 			*state.error ? state.error : "read or write failure";
@@ -745,8 +834,9 @@ int service_run(const service_options *options)
 
 		state.json_log = options->log_format &&
 				 !std::strcmp(options->log_format, "json");
-		input = udp_socket(cot ? cot : "0.0.0.0:9001", true);
-		state.output = udp_socket(vmf ? vmf : "127.0.0.1:9002", false);
+		input = udp_socket(cot ? cot : "0.0.0.0:9001", true, nullptr);
+		state.output = udp_socket(vmf ? vmf : "127.0.0.1:9002", false,
+					  &multicast);
 		if (input < 0 || state.output < 0) {
 			std::fputs("Cannot configure UDP sockets\n", stderr);
 			result = 1;

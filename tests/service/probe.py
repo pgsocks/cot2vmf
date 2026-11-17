@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Black-box service workflows using synthetic, non-operational schemas."""
 import copy
+import errno
+import fcntl
 import http.client
 import json
 import os
@@ -8,6 +10,7 @@ from pathlib import Path
 import select
 import signal
 import socket
+import struct
 import subprocess
 import sys
 import tempfile
@@ -26,7 +29,10 @@ EVENT = (b'<event version="2.0" uid="synthetic-service" type="a-f-G" '
 ENTRYPOINT = Path(__file__).resolve().parents[2] / "entrypoint.sh"
 ENTRYPOINT_RUNTIME_ENV = ("COT_VMF_WORKSPACE", "COT_VMF_WEB_LISTEN",
                          "COT_VMF_LOG_FORMAT", "COT_VMF_COT_LISTEN",
-                         "COT_VMF_VMF_TARGET")
+                         "COT_VMF_VMF_TARGET",
+                         "COT_VMF_VMF_MULTICAST_INTERFACE",
+                         "COT_VMF_VMF_MULTICAST_TTL",
+                         "COT_VMF_VMF_MULTICAST_LOOP")
 ENTRYPOINT_ENV = ENTRYPOINT_RUNTIME_ENV + (
     "COT_VMF_CONFIG_FILE", "COT_VMF_SCHEMAS", "COT_VMF_MAPPINGS", "COT_VMF_SET")
 
@@ -322,7 +328,9 @@ def entrypoint_arguments(binary, root):
     defaults = {"--workspace": "/var/lib/cot-to-vmf",
                 "--web": "0.0.0.0:8080", "--log-format": "json",
                 "--cot-listen": "0.0.0.0:9001",
-                "--vmf-target": "127.0.0.1:9002"}
+                "--vmf-target": "127.0.0.1:9002",
+                "--vmf-multicast-ttl": "1",
+                "--vmf-multicast-loop": "1"}
 
     def invoke(arguments=(), variables=None, status=0):
         calls_file.write_text("")
@@ -370,14 +378,24 @@ def entrypoint_arguments(binary, root):
     expected["--no-web"] = None
     assert runtime == expected and not seeds
     values = ("a workspace ; $literal", "127.0.0.1:18080", "human",
-              "127.0.0.1:19001", "receiver:19002")
+              "127.0.0.1:19001", "receiver:19002", "127.0.0.1", "17", "0")
     variables = dict(zip(ENTRYPOINT_RUNTIME_ENV, values))
     expected = dict(zip(("--workspace", "--web", "--log-format",
-                         "--cot-listen", "--vmf-target"), values))
+                         "--cot-listen", "--vmf-target",
+                         "--vmf-multicast-interface", "--vmf-multicast-ttl",
+                         "--vmf-multicast-loop"), values))
     assert initialized(variables=variables)[0] == expected
-    explicit = [item for pair in defaults.items() for item in pair]
-    assert initialized(explicit, variables)[0] == defaults
-    assert initialized(["run", *explicit], variables)[0] == defaults
+    overridden = dict(defaults, **{"--vmf-multicast-interface": "0.0.0.0"})
+    explicit = [item for pair in overridden.items() for item in pair]
+    assert initialized(explicit, variables)[0] == overridden
+    assert initialized(["run", *explicit], variables)[0] == overridden
+    for flag in ("--vmf-multicast-interface", "--vmf-multicast-ttl",
+                 "--vmf-multicast-loop"):
+        runtime = initialized(["run", flag, overridden[flag]], variables)[0]
+        assert runtime == dict(expected, **{flag: overridden[flag]})
+        assert invoke(["run", flag]) == [["run", flag]]
+        duplicate = ["run", flag, "1", flag, "1"]
+        assert invoke(duplicate) == [duplicate]
     assert initialized(["run", "--workspace", "--web"])[0] == dict(
         defaults, **{"--workspace": "--web"})
     assert initialized(["run", "--web"])[0] == dict(defaults, **{"--web": None})
@@ -410,6 +428,11 @@ def entrypoint_arguments(binary, root):
                       ["run", "--web", "--no-web"],
                       ["run", "--log-format", "json", "--log-format", "human"]):
         command(str(ENTRYPOINT), *arguments, status=2, environment=environment)
+    for flag in ("--vmf-multicast-interface", "--vmf-multicast-ttl",
+                 "--vmf-multicast-loop"):
+        for arguments in (["run", flag], ["run", flag, "1", flag, "1"]):
+            command(str(ENTRYPOINT), *arguments, status=2,
+                    environment=environment)
 
 
 def entrypoint_service(binary, root):
@@ -431,6 +454,9 @@ def entrypoint_service(binary, root):
                     f"127.0.0.1:{service.output.getsockname()[1]}"})
             if mode == "cli":
                 environment.update(dict.fromkeys(ENTRYPOINT_RUNTIME_ENV, "invalid"))
+                arguments += ["--vmf-multicast-interface", "127.0.0.1",
+                              "--vmf-multicast-ttl", "17",
+                              "--vmf-multicast-loop", "0"]
                 return [str(ENTRYPOINT), *arguments[1:]], environment
             if mode in ("seed", "invalid"):
                 environment["COT_VMF_CONFIG_FILE"] = str(initial)
@@ -661,6 +687,188 @@ def translation(binary, root):
         assert changed[0] != original[0] and changed[1] == original[1]
     finally:
         service.close()
+
+
+def multicast_receiver(group, port, interface):
+    receiver = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        receiver.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        receiver.bind(("0.0.0.0", port))
+        receiver.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP,
+                            socket.inet_aton(group) +
+                            socket.inet_aton(interface))
+        # IP_RECVTTL is a Linux socket option absent in some Python builds.
+        receiver.setsockopt(socket.IPPROTO_IP,
+                            getattr(socket, "IP_RECVTTL", 12), 1)
+        receiver.settimeout(2)
+        return receiver
+    except BaseException:
+        receiver.close()
+        raise
+
+
+def multicast_packets(receiver, interface, ttl, count=2):
+    packets = []
+    for _ in range(count):
+        packet, ancillary, flags, peer = receiver.recvmsg(
+            65535, socket.CMSG_SPACE(struct.calcsize("i")))
+        assert not flags, "truncated multicast datagram or TTL metadata"
+        assert peer[0] == interface, (peer, interface)
+        received_ttl = [struct.unpack("i", value)[0]
+                        for level, kind, value in ancillary
+                        if level == socket.IPPROTO_IP and kind == socket.IP_TTL]
+        assert received_ttl == [ttl], received_ttl
+        packets.append(packet)
+    return packets
+
+
+def multicast_interface():
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+        for _, name in socket.if_nameindex():
+            request = struct.pack("256s", name.encode())
+            flags = struct.unpack_from("H", fcntl.ioctl(
+                probe, 0x8913, request), 16)[0]
+            # IFF_UP, IFF_MULTICAST, and not IFF_LOOPBACK.
+            if flags & 0x1 and flags & 0x1000 and not flags & 0x8:
+                try:
+                    address = fcntl.ioctl(probe, 0x8915, request)[20:24]
+                    return socket.inet_ntoa(address)
+                except OSError:
+                    continue
+    raise AssertionError("multicast loop suppression needs an up, "
+                         "multicast-capable non-loopback IPv4 interface")
+
+
+def multicast(binary, root):
+    invalid = {
+        "--vmf-multicast-interface": ["", "eth0", "::1", "999.0.0.1",
+                                      "239.1.1.1", "255.255.255.255"],
+        "--vmf-multicast-ttl": ["", "-1", "+1", "256", "1.0", "1x", " 1",
+                                "9999999999999999999999999999"],
+        "--vmf-multicast-loop": ["", "-1", "2", "true", "false", "01"],
+    }
+    rejected = root.parent / "invalid-multicast"
+    for flag, values in invalid.items():
+        for value in values:
+            command(binary, "run", "--workspace", rejected, flag, value,
+                    status=2)
+        command(binary, "run", "--workspace", rejected, flag, status=2)
+        value = "127.0.0.1" if flag.endswith("interface") else "1"
+        command(binary, "run", "--workspace", rejected,
+                flag, value, flag, value, status=2)
+    assert not rejected.exists(), "invalid runtime flags opened the workspace"
+
+    group = "239.255.42.99"
+    unavailable = None
+    for candidate in ("192.0.2.123", "198.51.100.123", "203.0.113.123"):
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+            try:
+                probe.bind((candidate, 0))
+            except OSError as error:
+                if error.errno != errno.EADDRNOTAVAIL:
+                    raise
+                unavailable = candidate
+                break
+    assert unavailable, "multicast setup test needs a nonlocal IPv4 address"
+    failed = command(binary, "run", "--workspace", root.parent / "unavailable",
+                     "--cot-listen", f"127.0.0.1:{unused_port(socket.SOCK_DGRAM)}",
+                     "--vmf-target", f"{group}:19002",
+                     "--vmf-multicast-interface", unavailable, status=1)
+    assert b"ready" not in failed.stdout and failed.stderr
+
+    config = root.parent / "multicast.json"
+    config.write_text(json.dumps(fixture()))
+    service = Service(binary, root, config)
+    try:
+        original = service.packets()
+    finally:
+        service.close()
+    saved = saved_files(root)
+    directory = root.parent / "bin"
+    directory.mkdir()
+    (directory / "cot-to-vmf").symlink_to(binary)
+
+    def launch(interface, port, ttl=None, loop=None):
+        def replace(service, arguments):
+            arguments[arguments.index("--vmf-target") + 1] = f"{group}:{port}"
+            if ttl == 17:
+                # Exercise the Docker environment path without web support.
+                environment = entrypoint_environment(directory)
+                environment.update({
+                    "COT_VMF_WEB_LISTEN": "",
+                    "COT_VMF_VMF_MULTICAST_INTERFACE": interface,
+                    "COT_VMF_VMF_MULTICAST_TTL": str(ttl),
+                    "COT_VMF_VMF_MULTICAST_LOOP": "1"})
+                return [str(ENTRYPOINT), *arguments[1:]], environment
+            arguments += ["--vmf-multicast-interface", interface]
+            if ttl is not None:
+                arguments += ["--vmf-multicast-ttl", str(ttl)]
+            if loop is not None:
+                arguments += ["--vmf-multicast-loop", str(loop)]
+            return arguments, None
+        return replace
+
+    for ttl in (None, 0, 17, 255):
+        with multicast_receiver(group, 0, "127.0.0.1") as first:
+            port = first.getsockname()[1]
+            with multicast_receiver(group, port, "127.0.0.1") as second:
+                service = Service(binary, root,
+                                  launch=launch("127.0.0.1", port, ttl))
+                try:
+                    service.send()
+                    expected_ttl = 1 if ttl is None else ttl
+                    assert multicast_packets(first, "127.0.0.1",
+                                             expected_ttl) == original
+                    assert multicast_packets(second, "127.0.0.1",
+                                             expected_ttl) == original
+                    if ttl == 17:
+                        service.reload()
+                        service.send()
+                        assert multicast_packets(first, "127.0.0.1",
+                                                 ttl) == original
+                        assert multicast_packets(second, "127.0.0.1",
+                                                 ttl) == original
+                finally:
+                    service.close()
+
+    def unicast_options(service, arguments):
+        return arguments + ["--vmf-multicast-interface", "0.0.0.0",
+                            "--vmf-multicast-ttl", "255",
+                            "--vmf-multicast-loop", "0"], None
+
+    service = Service(binary, root, launch=unicast_options)
+    try:
+        assert service.packets() == original
+    finally:
+        service.close()
+
+    # Linux delivers lo traffic even with IP_MULTICAST_LOOP disabled. Use a
+    # real interface and TTL zero to test suppression without off-host data.
+    interface = multicast_interface()
+    for loop in (1, 0):
+        with multicast_receiver(group, 0, interface) as receiver:
+            service = Service(binary, root, launch=launch(
+                interface, receiver.getsockname()[1], 0, loop))
+            try:
+                service.send()
+                if loop:
+                    assert multicast_packets(receiver, interface, 0) == original
+                else:
+                    assert select.select([service.proc.stdout], [], [], 5)[0], (
+                        "service did not process the event")
+                    event = json.loads(service.proc.stdout.readline())
+                    assert event == {"event": "received", "decoded": True,
+                                     "outputs_succeeded": 2, "outputs_failed": 0}
+                    receiver.settimeout(.3)
+                    try:
+                        receiver.recv(65535)
+                    except socket.timeout:
+                        pass
+                    else:
+                        raise AssertionError("disabled multicast loop delivered VMF")
+            finally:
+                service.close()
+    assert saved_files(root) == saved, "multicast options changed saved state"
 
 
 def portable_envelopes(binary, root):
@@ -1395,7 +1603,7 @@ def persistence_failures(service, root, original):
 if __name__ == "__main__":
     with tempfile.TemporaryDirectory(prefix="cot-vmf-service-") as directory:
         root = Path(directory) / "workspace"
-        {"monitor": monitor, "translation": translation,
+        {"monitor": monitor, "translation": translation, "multicast": multicast,
          "portable-envelopes": portable_envelopes,
          "configuration": configuration,
          "entrypoint-arguments": entrypoint_arguments,

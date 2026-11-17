@@ -5,7 +5,10 @@ services:
       context: ..
       target: production
     environment:
-      COT_VMF_VMF_TARGET: "239.0.12.12:1581"
+      COT_VMF_VMF_TARGET: ${VMF_TARGET:-239.0.12.12:1581}
+      COT_VMF_VMF_MULTICAST_INTERFACE: ${VMF_MULTICAST_INTERFACE:-}
+      COT_VMF_VMF_MULTICAST_TTL: ${VMF_MULTICAST_TTL:-1}
+      COT_VMF_VMF_MULTICAST_LOOP: ${VMF_MULTICAST_LOOP:-1}
     volumes:
       - workspace:/var/lib/cot-to-vmf
     read_only: true

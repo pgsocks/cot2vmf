@@ -8,7 +8,7 @@ static int workflow_status;
 WHEN("^the \"(monitor|translation|editing|publication|persistence-size|"
 	"revisions|authorities|large-lookup|feedback|entrypoint|"
 	"entrypoint-arguments|configuration|schema-restoration|mapping-import|"
-	"portable-envelopes)\" "
+	"portable-envelopes|multicast)\" "
 	"service workflow is exercised$")
 {
 	REGEX_PARAM(std::string, workflow);

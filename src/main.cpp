@@ -16,6 +16,11 @@ static void usage(void)
 	    "Run options (apply to this invocation only):\n"
 	    "  --cot-listen HOST:PORT  CoT UDP input (0.0.0.0:9001)\n"
 	    "  --vmf-target HOST:PORT  VMF UDP output (127.0.0.1:9002)\n"
+	    "  Multicast destinations also accept:\n"
+	    "  --vmf-multicast-interface IPv4 (default: system routing)\n"
+	    "      Local IPv4 address; 0.0.0.0 also uses system routing\n"
+	    "  --vmf-multicast-ttl N  Hop limit 0..255 (default: 1)\n"
+	    "  --vmf-multicast-loop 0|1  Local delivery (default: 1)\n"
 	    "  --web [IP:PORT]     Enable GUI (0.0.0.0:8080)\n"
 	    "  --no-web            Disable GUI (native default)\n"
 	    "  --log-format human|json (native default: human)\n"
@@ -163,6 +168,12 @@ int main(int argc, char **argv)
 			destination = &options.cot_listen;
 		else if (!std::strcmp(argv[i], "--vmf-target"))
 			destination = &options.vmf_target;
+		else if (!std::strcmp(argv[i], "--vmf-multicast-interface"))
+			destination = &options.vmf_multicast_interface;
+		else if (!std::strcmp(argv[i], "--vmf-multicast-ttl"))
+			destination = &options.vmf_multicast_ttl;
+		else if (!std::strcmp(argv[i], "--vmf-multicast-loop"))
+			destination = &options.vmf_multicast_loop;
 		else if (!std::strcmp(argv[i], "--log-format"))
 			destination = &options.log_format;
 		if (!destination || *destination)

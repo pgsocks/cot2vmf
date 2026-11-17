@@ -24,6 +24,9 @@ run_options()
 	entrypoint_workspace_seen=0
 	entrypoint_cot_seen=0
 	entrypoint_vmf_seen=0
+	entrypoint_multicast_interface_seen=0
+	entrypoint_multicast_ttl_seen=0
+	entrypoint_multicast_loop_seen=0
 	entrypoint_web_seen=0
 	entrypoint_log_seen=0
 	while [ "$#" -gt 0 ]; do
@@ -45,7 +48,9 @@ run_options()
 				entrypoint_web_seen=1
 				shift
 				;;
-			--workspace|--cot-listen|--vmf-target|--log-format)
+			--workspace|--cot-listen|--vmf-target|--log-format|\
+			--vmf-multicast-interface|--vmf-multicast-ttl|\
+			--vmf-multicast-loop)
 				[ "$#" -ge 2 ] || return 1
 				case "$1" in
 					--workspace)
@@ -60,6 +65,18 @@ run_options()
 					--vmf-target)
 						[ "$entrypoint_vmf_seen" -eq 0 ] || return 1
 						entrypoint_vmf_seen=1
+						;;
+					--vmf-multicast-interface)
+						[ "$entrypoint_multicast_interface_seen" -eq 0 ] || return 1
+						entrypoint_multicast_interface_seen=1
+						;;
+					--vmf-multicast-ttl)
+						[ "$entrypoint_multicast_ttl_seen" -eq 0 ] || return 1
+						entrypoint_multicast_ttl_seen=1
+						;;
+					--vmf-multicast-loop)
+						[ "$entrypoint_multicast_loop_seen" -eq 0 ] || return 1
+						entrypoint_multicast_loop_seen=1
 						;;
 					--log-format)
 						[ "$entrypoint_log_seen" -eq 0 ] || return 1
@@ -118,6 +135,16 @@ if [ "$entrypoint_cot_seen" -eq 0 ]; then
 fi
 if [ "$entrypoint_vmf_seen" -eq 0 ]; then
 	set -- --vmf-target "${COT_VMF_VMF_TARGET:-127.0.0.1:9002}" "$@"
+fi
+if [ "$entrypoint_multicast_interface_seen" -eq 0 ] &&
+   [ -n "${COT_VMF_VMF_MULTICAST_INTERFACE:-}" ]; then
+	set -- --vmf-multicast-interface "$COT_VMF_VMF_MULTICAST_INTERFACE" "$@"
+fi
+if [ "$entrypoint_multicast_ttl_seen" -eq 0 ]; then
+	set -- --vmf-multicast-ttl "${COT_VMF_VMF_MULTICAST_TTL:-1}" "$@"
+fi
+if [ "$entrypoint_multicast_loop_seen" -eq 0 ]; then
+	set -- --vmf-multicast-loop "${COT_VMF_VMF_MULTICAST_LOOP:-1}" "$@"
 fi
 if [ "$entrypoint_log_seen" -eq 0 ]; then
 	set -- --log-format "${COT_VMF_LOG_FORMAT:-json}" "$@"
