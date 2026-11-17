@@ -1,6 +1,96 @@
 #include "bridge.h"
 #include <cmath>
 #include <cstdio>
+#include <cstring>
+
+static bool xml_name_char(uint8_t value)
+{
+	return (value >= 'a' && value <= 'z') ||
+	       (value >= 'A' && value <= 'Z') ||
+	       (value >= '0' && value <= '9') || value == '_' ||
+	       value == ':' || value == '-' || value == '.';
+}
+
+static bool timestamp_attribute(const uint8_t *data, size_t size, size_t at,
+				const char *name, size_t *value)
+{
+	size_t length = std::strlen(name);
+
+	if ((at && xml_name_char(data[at - 1])) || at > size ||
+	    length > size - at || size - at - length < 2 ||
+	    std::memcmp(data + at, name, length) ||
+	    data[at + length] != '=' || data[at + length + 1] != '"')
+		return false;
+	*value = at + length + 2;
+	return true;
+}
+
+static bool timestamp_trim(const uint8_t *data, size_t size, size_t at,
+			   size_t *start, size_t *end)
+{
+	static const char *const names[] = {"time", "start", "stale"};
+	size_t value = 0;
+
+	for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); ++i)
+		if (timestamp_attribute(data, size, at, names[i], &value)) {
+			size_t digits = value + 20;
+			size_t count = 0;
+			bool extra = false;
+
+			if (value > size || size - value < 20 ||
+			    data[value + 19] != '.')
+				return false;
+			while (digits < size && data[digits] >= '0' &&
+			       data[digits] <= '9') {
+				if (count >= 3 && data[digits] != '0')
+					extra = true;
+				++digits;
+				++count;
+			}
+			if (extra && count > 3) {
+				*start = value + 23;
+				*end = digits;
+				return true;
+			}
+		}
+	return false;
+}
+
+static bool normalize_xml_timestamps(bridge_context *ctx,
+				     const uint8_t *data, size_t size,
+				     const uint8_t **normalized, size_t *length)
+{
+	uint8_t *copy = nullptr;
+	size_t source = 0;
+	size_t target = 0;
+
+	for (size_t at = 0; at < size;) {
+		size_t start, end;
+
+		if (!timestamp_trim(data, size, at, &start, &end)) {
+			++at;
+			continue;
+		}
+		if (!copy) {
+			copy = static_cast<uint8_t *>(bridge_alloc(ctx, size));
+			if (!copy)
+				return false;
+		}
+		std::memcpy(copy + target, data + source, start - source);
+		target += start - source;
+		source = end;
+		at = end;
+	}
+	if (!copy) {
+		*normalized = data;
+		*length = size;
+		return true;
+	}
+	std::memcpy(copy + target, data + source, size - source);
+	*normalized = copy;
+	*length = target + size - source;
+	return true;
+}
 
 bool bridge_source_value_valid(bridge_context *ctx, int id,
 			       const bridge_value *value)
@@ -47,8 +137,16 @@ bool bridge_cot_load(bridge_context *ctx, cot_format format,
 		     const uint8_t *data, size_t size)
 {
 	cot_diagnostic error = {};
-	cot_status status =
-	    cot_decode_ex(format, data, size, &ctx->cot_owner, &error);
+	const uint8_t *normalized = data;
+	size_t normalized_size = size;
+	cot_status status;
+
+	if (format == COT_FORMAT_XML &&
+	    !normalize_xml_timestamps(ctx, data, size, &normalized,
+				       &normalized_size))
+		return false;
+	status = cot_decode_ex(format, normalized, normalized_size,
+		&ctx->cot_owner, &error);
 
 	ctx->error_code = "cot_decode";
 	if (status != COT_STATUS_OK) {

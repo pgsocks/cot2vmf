@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 
 cv_status cv_fail(cv_error *error, cv_status status, const char *message)
 {
@@ -100,6 +101,11 @@ bool cv_schema_load(yyjson_val *document, vmf_schema_json_document **owner,
 		return false;
 	}
 	auto options = vmf_schema_json_default_options();
+	/* Full MIL-STD editions can contain hundreds of message definitions.
+	 * Keep the JSON byte limit unchanged, but allow their expanded parser
+	 * representation to exceed the VMF library's smaller default budget.
+	 */
+	options.max_memory_bytes = 128u * 1024u * 1024u;
 	vmf_schema_json_error diagnostic = {};
 	vmf_status status =
 		vmf_schema_json_load(text, size, &options, owner, &diagnostic);
@@ -245,6 +251,49 @@ void cv_workspace_destroy(cv_workspace *workspace)
 	std::free(workspace);
 }
 
+/* A configured originator DTG is the template; CoT event time supplies
+ * the per-event value without mutating the immutable compiled header.
+ */
+static bool header_time(bridge_context *ctx, uint64_t milliseconds)
+{
+	vmf_header_fields *fields = bridge_header_fields(ctx);
+	vmf_message_header *message;
+	time_t seconds;
+	tm utc = {};
+	unsigned year;
+
+	if (!fields || fields->message_count != 1 || !fields->messages ||
+	    !fields->messages[0].originator_dtg.present)
+		return true;
+	seconds = static_cast<time_t>(milliseconds / 1000);
+	if (seconds < 0 || static_cast<uint64_t>(seconds) != milliseconds / 1000 ||
+	    !gmtime_r(&seconds, &utc))
+		return bridge_fail(ctx, "CoT send time cannot populate VMF header");
+	year = static_cast<unsigned>(utc.tm_year + 1900);
+	if (year >= 2000 && year <= 2094)
+		year -= 2000;
+	else if (year >= 1995 && year <= 1999)
+		year -= 1900;
+	else
+		return bridge_fail(ctx, "CoT send time is outside VMF DTG range");
+	message = static_cast<vmf_message_header *>(bridge_alloc(
+		ctx, sizeof(vmf_message_header)));
+	if (!message)
+		return false;
+	*message = fields->messages[0];
+	message->originator_dtg = {
+		true,
+		static_cast<uint8_t>(year),
+		static_cast<uint8_t>(utc.tm_mon + 1),
+		static_cast<uint8_t>(utc.tm_mday),
+		static_cast<uint8_t>(utc.tm_hour),
+		static_cast<uint8_t>(utc.tm_min),
+		static_cast<uint8_t>(utc.tm_sec),
+		{}};
+	fields->messages = message;
+	return true;
+}
+
 /* The compiled mapping remains immutable. Only transient binding/control
  * activity and value allocations belong to a fresh job for this one event.
  */
@@ -272,7 +321,9 @@ static bool job_begin(const bridge_context *compiled,
 		    job->binding_count * sizeof(bridge_binding));
 	std::memcpy(job->controls, compiled->controls,
 		    job->control_count * sizeof(bridge_control));
-	return true;
+	if (received->cot[COT_FIELD_SEND_TIME_MS].kind != BRIDGE_UINT)
+		return true;
+	return header_time(job, received->cot[COT_FIELD_SEND_TIME_MS].u);
 }
 
 cv_status cv_process(const cv_workspace *workspace, const uint8_t *data,

@@ -297,6 +297,48 @@ TEST(Core, ReceiveOnlyDecodesAndReportsPresentFields)
 	EXPECT_EQ(0u, activity.present_fields);
 }
 
+TEST(Core, XmlTimestampsTruncateToMillisecondPrecision)
+{
+	std::string xml = event();
+
+	xml = replace(xml, "2024-01-01T00:00:00Z",
+			      "2024-01-01T00:00:00.1234567Z");
+	xml = replace(xml, "2024-01-01T00:01:00Z",
+			      "2024-01-01T00:01:00.7654321Z");
+	cv_activity activity = {};
+	cv_error error = {};
+
+	EXPECT_EQ(CV_OK, cv_process(nullptr,
+		 reinterpret_cast<const uint8_t *>(xml.data()), xml.size(),
+		 nullptr, nullptr, &activity, &error));
+	EXPECT_TRUE(activity.decoded);
+	EXPECT_EQ(CV_OK, error.status);
+}
+
+TEST(Core, HeaderOriginatorDtgTracksCoTSendTime)
+{
+	const std::string header =
+		"{\"fields\":{\"messages\":[{\"originator_dtg\":{"
+		"\"year\":24,\"month\":1,\"day\":1,"
+		"\"hour\":0,\"minute\":0,\"second\":0}}]}}";
+	owner loaded;
+
+	ASSERT_EQ(CV_OK, loaded.load(workspace(schema(field), output(
+		"time", mapping(latitude, ",\"vmf_header\":" + header)))))
+		<< loaded.error.message;
+	sink first;
+	sink second;
+	cv_activity activity = {};
+	std::string later = replace(event(), "2024-01-01T00:00:00Z",
+					   "2024-01-01T00:00:01Z");
+
+	ASSERT_EQ(CV_OK, process(&loaded, event(), &first, &activity));
+	ASSERT_EQ(CV_OK, process(&loaded, later, &second, &activity));
+	ASSERT_EQ(1u, first.packets.size());
+	ASSERT_EQ(1u, second.packets.size());
+	EXPECT_NE(first.packets[0].bytes, second.packets[0].bytes);
+}
+
 TEST(Core, SubsetFeedbackReportsSuccessfulIntendedOutput)
 {
 	std::string definition = schema(std::string(field) +
