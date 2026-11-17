@@ -692,7 +692,19 @@ static bool publish(void *user, const char *, const uint8_t *data, size_t size)
 	do {
 		count = send(state->output, data, size, MSG_NOSIGNAL);
 	} while (count < 0 && errno == EINTR);
-	return count >= 0 && static_cast<size_t>(count) == size;
+	if (count < 0) {
+		int error = errno;
+
+		std::fprintf(stderr, "VMF UDP send failed: %s (errno %d)\n",
+			     std::strerror(error), error);
+		return false;
+	}
+	if (static_cast<size_t>(count) != size) {
+		std::fprintf(stderr, "VMF UDP send failed: short datagram "
+			     "(%zd of %zu bytes)\n", count, size);
+		return false;
+	}
+	return true;
 }
 
 static bool initialize(service_state *state, const service_options *options,

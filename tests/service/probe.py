@@ -689,6 +689,38 @@ def translation(binary, root):
         service.close()
 
 
+def send_failure(binary, root):
+    config = root.parent / "send-failure.json"
+    config.write_text(json.dumps(fixture()))
+    service = Service(binary, root, config)
+    try:
+        target = service.output.getsockname()
+        service.output.close()
+        # A closed loopback port produces ICMP port-unreachable feedback on
+        # the connected UDP socket; subsequent sends expose ECONNREFUSED.
+        for _ in range(8):
+            service.send()
+            assert select.select([service.proc.stdout], [], [], 5)[0]
+            event = json.loads(service.proc.stdout.readline())
+            assert event["decoded"]
+            if event["outputs_failed"]:
+                break
+        else:
+            raise AssertionError("closed UDP port did not fail publication")
+        service.errors.seek(0)
+        diagnostic = service.errors.read().decode()
+        expected = (f"VMF UDP send failed: {os.strerror(errno.ECONNREFUSED)} "
+                    f"(errno {errno.ECONNREFUSED})")
+        assert expected in diagnostic, diagnostic
+        assert "synthetic-service" not in diagnostic
+        service.output = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        service.output.bind(target)
+        service.output.settimeout(2)
+        assert len(service.packets()) == 2
+    finally:
+        service.close()
+
+
 def multicast_receiver(group, port, interface):
     receiver = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
@@ -1604,6 +1636,7 @@ if __name__ == "__main__":
     with tempfile.TemporaryDirectory(prefix="cot-vmf-service-") as directory:
         root = Path(directory) / "workspace"
         {"monitor": monitor, "translation": translation, "multicast": multicast,
+         "send-failure": send_failure,
          "portable-envelopes": portable_envelopes,
          "configuration": configuration,
          "entrypoint-arguments": entrypoint_arguments,

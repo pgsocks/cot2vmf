@@ -26,6 +26,10 @@ Feature: Continuous CoT translation through UDP
     When the "multicast" service workflow is exercised
     Then all service assertions succeed
 
+  Scenario: Explain UDP send failures and recover when a receiver returns
+    When the "send-failure" service workflow is exercised
+    Then all service assertions succeed
+
   Scenario: Share one payload definition across four envelope outputs
     When the "portable-envelopes" service workflow is exercised
     Then all service assertions succeed
